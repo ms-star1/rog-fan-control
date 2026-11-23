@@ -1,18 +1,79 @@
-# ROG Fan Control (ROG Strix G614JI, Fedora)
+# ROG Fan Control
 
-GTK4/libadwaita-App für Lüfterkurven, Vollgas, Energieprofile und Leistungslimits.
+GTK4/libadwaita-App für Linux zur Steuerung der Lüfter und Leistungslimits von ASUS-ROG-Laptops:
+eigene Lüfterkurven pro Energieprofil, Vollgas-Modus, Profilwechsel und CPU/GPU-Leistungslimits.
+Ein kleiner systemd-Dienst hält die Einstellungen über Profilwechsel, Standby und Neustart hinweg aktiv.
 
-| Teil | Ort | Aufgabe |
+*English summary: GTK4/libadwaita fan and power-limit control for ASUS ROG laptops on Linux
+(custom fan curves per platform profile, full-speed mode, PL1/PL2 and NVIDIA limits).
+UI language is German. Tested on a single device only, see below.*
+
+> [!WARNING]
+> **Nur auf einem einzigen Gerät getestet** (siehe [Testgerät](#testgerät)). Das Verhalten der
+> ASUS-Firmware unterscheidet sich je nach Modell und BIOS-Version. Auf anderen Geräten kann die
+> App falsch funktionieren oder gar nicht. Sie schreibt direkt in Kernel-Schnittstellen für Lüfter
+> und Leistung. Nutzung auf eigenes Risiko, ohne Gewähr (siehe [LICENSE](LICENSE)).
+
+## Testgerät
+
+Getestet ausschließlich auf diesem Gerät und dieser Software:
+
+| | |
+|---|---|
+| Gerät | ASUS ROG Strix G16 (2023), Modell **G614JI** (`ROG Strix G614JI_G614JI`) |
+| BIOS | G614JI.333 (01.10.2025) |
+| CPU | Intel Core i7-13650HX |
+| GPU | NVIDIA GeForce RTX 4070 Laptop GPU, proprietärer Treiber 620.70.06 |
+| System | Fedora Linux 45 Workstation, Kernel 7.3.4-300.fc45 |
+| Desktop | GNOME Shell 51.1 (Wayland) |
+| Bibliotheken | Python 3.15.2, GTK 4.24.1, libadwaita 1.10.0, polkit 127 |
+| Energieprofile | tuned-ppd 2.28.0 (mit thermald und nvidia-powerd) |
+
+Andere ROG/TUF-Modelle mit denselben Kernel-Schnittstellen (`asus_custom_fan_curve`,
+`asus-armoury`) könnten funktionieren. Das ist aber **nicht geprüft**. Rückmeldungen per Issue
+sind willkommen.
+
+## Funktionen
+
+- **Übersicht:** Live-Verlauf (5 Minuten) von CPU- und GPU-Temperatur und den drei Lüftern
+  (CPU, GPU, Mitte). Die GPU-Temperatur wird nur abgefragt, wenn die GPU ohnehin wach ist, damit
+  sie schlafen kann.
+- **Energieprofil:** Leise / Ausgewogen / Leistung. Synchron mit dem GNOME-Energiemodus und Fn+F5,
+  läuft über den PowerProfiles-D-Bus.
+- **Vollgas:** pro Lüfter, bis zum Abschalten oder Neustart.
+- **Lüfterkurven:** grafischer Editor mit 8 Punkten pro Lüfter und Profil. Die Werkskurve wird zum
+  Vergleich gestrichelt angezeigt, dazu die aktuelle Temperatur. Vorlagen: Leise, Ausgewogen,
+  Kühl, Werkskurve.
+- **Leistungslimits pro Profil:** CPU PL1/PL2, NVIDIA Dynamic Boost, NVIDIA-Temperaturziel.
+- **Hinweise auf Konflikte:** zum Beispiel wenn asusd, power-profiles-daemon und tuned-ppd
+  gleichzeitig laufen, nvidia-powerd fehlt oder eine Kurve gerade nicht aktiv ist.
+- **Sicherheitsprüfung:** nur steigende Kurven, Temperaturen von 20 bis 100 °C, letzter Punkt
+  mindestens 30 % Drehzahl, PL2 ≥ PL1. Der Kernel prüft selbst nichts davon.
+
+## Aufbau
+
+| Teil | Ort (RPM) | Aufgabe |
 |---|---|---|
-| Oberfläche | `rog-fan-control` (App-Menü: „ROG Lüftersteuerung") | läuft als Benutzer, liest nur |
-| Helfer | `<libexec>/rog-fan-control/rog-fan-helper` | schreibt geprüfte Werte, via pkexec |
-| Dienst | `rog-fan-control.service` | setzt Kurven/Limits bei Boot, Profilwechsel, nach Standby |
-| Konfiguration | `/etc/rog-fan-control/config.json` | eigene Kurven + Limits pro Profil |
+| Oberfläche | `rog-fan-control`, App-Menü „ROG Lüftersteuerung“ | läuft als Benutzer, liest nur |
+| Helfer | `/usr/libexec/rog-fan-control/rog-fan-helper` | schreibt geprüfte Werte, gestartet via pkexec/polkit |
+| Dienst | `rog-fan-control.service` | setzt Kurven und Limits bei Boot, Profilwechsel und nach Firmware-Reset |
+| Konfiguration | `/etc/rog-fan-control/config.json` | eigene Kurven und Limits pro Profil |
 | Werkskurven | `/var/lib/rog-fan-control/factory.json` | vom Dienst beim Profilwechsel eingelesen |
+
+Die Polkit-Aktion `org.local.rogfancontrol.helper` verlangt ein Admin-Passwort und merkt es sich
+einige Minuten lang (`auth_admin_keep`).
+
+## Voraussetzungen
+
+- Kernel mit `asus-wmi` (hwmon `asus` und `asus_custom_fan_curve`) und `asus-armoury`
+  (`/sys/class/firmware-attributes/asus-armoury`)
+- Python 3, PyGObject, GTK 4, libadwaita ≥ 1.7, polkit, systemd
+- für die GPU-Temperatur: `nvidia-smi`; für Dynamic Boost: `nvidia-powerd`
+- **nicht gleichzeitig mit asusctl/asusd verwenden**, sonst überschreiben sich beide gegenseitig
 
 ## Installieren
 
-**Als RPM** (empfohlen): Das RPM aus dem neuesten GitHub-Release oder aus `make rpm` installieren:
+**Als RPM** (Fedora): Das RPM aus dem neuesten [Release](../../releases) installieren:
 
 ```sh
 sudo dnf install ./rog-fan-control-*.noarch.rpm
@@ -20,7 +81,8 @@ sudo systemctl enable --now rog-fan-control   # Fedora aktiviert neue Dienste ni
 ```
 
 **Ohne RPM** nach `/usr/local`: `sudo ./install.sh`, Entfernen mit `sudo ./uninstall.sh [--purge]`.
-Nicht beides gleichzeitig installieren, sonst laufen zwei Dienste.
+Das Entfernen setzt Lüfter und Limits auf Werkseinstellung zurück. Nicht beide Varianten
+gleichzeitig installieren, sonst laufen zwei Dienste.
 
 Log: `journalctl -u rog-fan-control`
 
@@ -31,12 +93,27 @@ make check   # Syntax, .desktop, Polkit-XML
 make rpm     # -> build/rpm/RPMS/noarch/*.rpm
 ```
 
-GitHub Actions baut bei jedem Push auf `main` das RPM (Artefakt „rpms“). Ein Tag `vX.Y.Z`,
-der zur `Version:` in `rog-fan-control.spec` passt, erstellt ein Release mit den RPMs.
+GitHub Actions baut bei jedem Push auf `main` das RPM (Artefakt „rpms“). Ein Tag `vX.Y.Z`, der zur
+`Version:` in `rog-fan-control.spec` passt, erstellt ein Release mit den RPMs.
 
-Gemessenes Kernel-Verhalten (7.3): `asus_custom_fan_curve/pwmN_enable` 1 = eigene Kurve,
-2 = Firmware, 3 = Firmware + Werkskurve laden. Der Kernel prüft Kurven nicht, deshalb
-`validate_curve()`. Ein Profilwechsel schaltet eigene Kurven ab. `asus/pwmN_enable` 0 = Vollgas,
-2 = Auto (GPU/Mitte lesen immer 0 → Zustand in `/run/rog-fan-control/state.json`).
-`asus-armoury` lehnt PL1/PL2-Änderungen ohne aktive eigene Kurve mit EBUSY ab; die App aktiviert
-dafür kurz die Werkskurve des Profils. Gemessen: Volllast 112 W bei PL1 139 → 45 W bei PL1 35/PL2 45.
+## Gemessenes Firmware-Verhalten (Testgerät)
+
+Diese Punkte wurden auf dem Testgerät gemessen und stehen so nicht in der Kernel-Doku. Auf
+anderen Modellen kann es anders sein.
+
+- `asus_custom_fan_curve/pwmN_enable`: `1` = eigene Kurve, `2` = Firmware-Kurve,
+  `3` = Firmware-Kurve und Werkspunkte des aktiven Profils laden (liest danach `2`).
+- Der Kernel nimmt auch unsinnige Kurven an (nicht monoton, 101 °C). Die App prüft das deshalb selbst.
+- Ein Profilwechsel schaltet eigene Kurven ab. Der Dienst setzt sie innerhalb von etwa 2 s neu.
+- `asus/pwmN_enable`: `0` = Vollgas, `2` = Automatik. GPU- und Mittellüfter lesen immer `0`,
+  deshalb wird der Zustand in `/run/rog-fan-control/state.json` mitgeführt.
+- `asus-armoury` lehnt PL1/PL2-Änderungen mit `EBUSY` ab („PPT change requires an active fan
+  curve“), solange keine eigene Kurve aktiv ist. Die App aktiviert dafür kurz die Werkskurve des
+  Profils und schaltet sie danach wieder ab. Das Limit bleibt erhalten und wirkt: Unter Volllast
+  sank die Leistung von 112 W (PL1 139 W) auf 45 W (PL1 35 / PL2 45 W).
+- Die Leistungslimits bleiben über Profilwechsel hinweg stehen. Der Dienst setzt deshalb bei
+  jedem Wechsel die Limits des neuen Profils.
+
+## Lizenz
+
+[MIT](LICENSE). Kein offizielles ASUS-Produkt, nicht mit ASUS verbunden.

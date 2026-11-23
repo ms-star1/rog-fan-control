@@ -14,7 +14,7 @@ PY        := rogfan_hw.py rog_fan_gui.py
 EXE       := rog-fan-helper rog-fan-daemon
 APPID     := org.local.RogFanControl
 GENERATED := build/$(NAME) build/$(NAME).service build/org.local.rogfancontrol.policy
-DISTFILES := Makefile $(NAME).spec README.md $(PY) $(EXE) $(NAME).service.in \
+DISTFILES := Makefile $(NAME).spec README.md LICENSE $(PY) $(EXE) $(NAME).service.in \
              org.local.rogfancontrol.policy.in $(APPID).desktop $(APPID).svg \
              install.sh uninstall.sh
 

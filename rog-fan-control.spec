@@ -1,8 +1,9 @@
 Name:           rog-fan-control
-Version:        0.1.1
+Version:        0.1.2
 Release:        1%{?dist}
 Summary:        Fan curves, fan modes, power profiles and power limits for ASUS ROG laptops
-License:        LicenseRef-Proprietary
+License:        MIT
+URL:            https://github.com/ms-star1/rog-fan-control
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      noarch
 
@@ -21,6 +22,9 @@ Requires:       systemd
 %{?systemd_requires}
 
 %description
+Tested only on an ASUS ROG Strix G16 G614JI (BIOS G614JI.333) with Fedora 45;
+firmware behaviour differs between models, use on other devices at your own risk.
+
 GTK4/libadwaita application to control the fans of ASUS ROG laptops through
 the asus-wmi and asus-armoury kernel drivers: custom fan curves per power
 profile, full-speed mode, platform profile switching and CPU/GPU power limits.
@@ -54,6 +58,7 @@ make check LIBEXECDIR=%{_libexecdir}/%{name}
 %systemd_postun_with_restart %{name}.service
 
 %files
+%license LICENSE
 %doc README.md
 %{_bindir}/%{name}
 %{_libexecdir}/%{name}/
@@ -64,6 +69,9 @@ make check LIBEXECDIR=%{_libexecdir}/%{name}
 %dir %{_sysconfdir}/%{name}
 
 %changelog
+* Mon Nov 23 2026 ms-star1 <294934886+ms-star1@users.noreply.github.com> - 0.1.2-1
+- MIT-Lizenz, Projekt-URL, ausführliche README mit Testgerät
+
 * Mon Nov 23 2026 ms-star1 <294934886+ms-star1@users.noreply.github.com> - 0.1.1-1
 - PL1/PL2 auch ohne eigene Lüfterkurve setzbar (Firmware verlangt aktive Kurve)
 - Klarere Fehlermeldungen für Passwortabfrage, fehlenden Helfer und Schreibfehler
