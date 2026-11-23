@@ -1,5 +1,5 @@
 Name:           rog-fan-control
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Fan curves, fan modes, power profiles and power limits for ASUS ROG laptops
 License:        MIT
@@ -69,6 +69,11 @@ make check LIBEXECDIR=%{_libexecdir}/%{name}
 %dir %{_sysconfdir}/%{name}
 
 %changelog
+* Tue Nov 24 2026 ms-star1 <294934886+ms-star1@users.noreply.github.com> - 0.3.1-1
+- Diagramme als kompakte, feste Leiste unter der Kopfzeile: in jedem Tab
+  sichtbar, der Inhalt scrollt darunter durch
+- Immer nebeneinander; bei schmalem Fenster seitlich scrollbar mit Pfeiltasten
+
 * Tue Nov 24 2026 ms-star1 <294934886+ms-star1@users.noreply.github.com> - 0.3.0-1
 - Verlauf in vier Karten: Temperatur, Lüfterdrehzahl, Leistungsaufnahme und
   neu Taktfrequenz (CPU Ø/max, GPU), mit aktuellen Werten in der Legende

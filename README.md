@@ -44,11 +44,13 @@ Rückmeldungen per Issue sind willkommen, am besten mit dem **Gerätebericht** a
   - optional: misst die Höchstdrehzahl jedes Lüfters (je bis zu 25 s Vollgas, laut), prüft, ob
     Vollgas wirkt, und erkennt Firmware-Eigenheiten wie falsche Drehzahlwerte
   - erstellt einen **Gerätebericht** zum Kopieren in ein Issue (nur Hardware- und Treiberdaten)
-- **Übersicht:** Live-Verlauf (5 Minuten) in vier Karten – Temperatur, Lüfterdrehzahl,
-  Leistungsaufnahme und Taktfrequenz (CPU Ø und max, GPU) – mit aktuellen Werten in der Legende.
-  Die Karten stehen je nach Fensterbreite nebeneinander (ab ca. 1100 px), im 2×2-Raster oder
-  untereinander; im schmalen Fenster wandert die Seitenumschaltung nach unten. Drehzahl auch in %
-  der gemessenen Höchstdrehzahl. Die GPU wird nur abgefragt, wenn sie ohnehin
+- **Verlauf immer im Blick:** Eine feste Leiste unter der Kopfzeile zeigt in jedem Tab vier
+  kompakte Diagramme der letzten 5 Minuten – Temperatur, Lüfterdrehzahl, Leistungsaufnahme und
+  Taktfrequenz (CPU Ø und max, GPU) – mit aktuellen Werten in der Legende. Der Seiteninhalt scrollt
+  darunter durch. Bei schmalem Fenster wird die Leiste seitlich scrollbar, mit Pfeiltasten links
+  und rechts; sehr schmal wandert die Seitenumschaltung nach unten.
+- **Übersicht:** Energieprofil, Vollgas pro Lüfter (Drehzahl auch in % der gemessenen
+  Höchstdrehzahl), Lasttest, Temperaturen und Leistung, Hinweise. Die GPU wird nur abgefragt, wenn sie ohnehin
   wach ist, damit sie schlafen kann.
 - **Leistungsaufnahme in Watt:**
   - CPU-Paket aus den RAPL-Energiezählern. Diese darf nur root lesen (Schutz vor dem

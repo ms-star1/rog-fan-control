@@ -29,7 +29,7 @@ import platform
 import subprocess
 import time
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 REPO_URL = "https://github.com/ms-star1/rog-fan-control"
 TESTED_DEVICE = "ASUS ROG Strix G16 G614JI (BIOS G614JI.333), Fedora 45, Kernel 7.3.4"
 

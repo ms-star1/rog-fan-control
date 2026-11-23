@@ -31,8 +31,8 @@ def prepare(win, view):
     if state["dialog"]:
         state["dialog"].force_close()
         state["dialog"] = None
-    sizes = {"overview_tall": (780, 1500), "wide": (1440, 760), "narrow": (440, 1300)}
-    win.set_default_size(*sizes.get(view, (820, 900)))
+    sizes = {"overview_tall": (780, 1500), "wide": (1440, 760), "narrow": (560, 900)}
+    win.set_default_size(*sizes.get(view, (900, 900)))
     if view in ("wide", "narrow"):
         win.stack.set_visible_child_name("overview")
     if view in ("overview", "overview_tall", "curves", "limits"):

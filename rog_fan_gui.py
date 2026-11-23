@@ -20,6 +20,7 @@ import rogfan_hw as hw  # noqa: E402
 
 APP_ID = "org.local.RogFanControl"
 HISTORY_SECONDS = 300
+CHART_MIN_WIDTH = 190  # darunter wird die Diagrammleiste seitlich scrollbar
 UI_SETTINGS = os.path.join(GLib.get_user_config_dir(), "rog-fan-control", "ui.json")
 LOAD_TOOL = os.path.join(os.path.dirname(os.path.realpath(__file__)), "rog-fan-load")
 LOAD_MODES = [("off", "Aus"), ("cpu", "CPU"), ("gpu", "GPU"), ("all", "Alles")]
@@ -140,20 +141,22 @@ class Chart(Gtk.Box):
     scale(werte) -> (min, max, schritt); fmt(wert) -> Text für die Legende"""
 
     def __init__(self, history, title, unit, series, get, scale, fmt, axis_fmt=None):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4, css_classes=["card"])
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=2, css_classes=["card"])
+        self.set_size_request(CHART_MIN_WIDTH, -1)
         self.history, self.unit, self.series = history, unit, series
         self.get, self.scale, self.fmt = get, scale, fmt
         self.axis_fmt = axis_fmt or (lambda v: f"{v:g}")
-        head = Gtk.Label(label=title, xalign=0, css_classes=["heading"])
-        self.legend = Gtk.Label(xalign=0, use_markup=True, wrap=True, css_classes=["caption"])
+        head = Gtk.Label(label=title, xalign=0, css_classes=["caption-heading"])
+        # einzeilig, damit die feste Leiste eine verlässliche Höhe hat
+        self.legend = Gtk.Label(xalign=0, use_markup=True, ellipsize=3, css_classes=["caption"])
         for w in (head, self.legend):
-            w.set_margin_start(12)
-            w.set_margin_end(12)
-        head.set_margin_top(10)
-        self.area = Gtk.DrawingArea(content_height=170, hexpand=True, vexpand=True)
+            w.set_margin_start(10)
+            w.set_margin_end(10)
+        head.set_margin_top(7)
+        self.area = Gtk.DrawingArea(content_height=92, hexpand=True, vexpand=True)
         self.area.set_draw_func(self._draw)
-        self.area.set_margin_end(10)
-        self.area.set_margin_bottom(6)
+        self.area.set_margin_end(8)
+        self.area.set_margin_bottom(4)
         self.append(head)
         self.append(self.legend)
         self.append(self.area)
@@ -165,12 +168,13 @@ class Chart(Gtk.Box):
             v = last.get(key)
             parts.append(f"<span foreground='{hexcol(rgb)}'>●</span> {GLib.markup_escape_text(name)} "
                          f"<b>{GLib.markup_escape_text(self.fmt(v) if v is not None else '–')}</b>")
-        self.legend.set_markup("   ".join(parts))
+        self.legend.set_markup("  ".join(parts))
+        self.legend.set_tooltip_markup("\n".join(parts))
         self.area.queue_draw()
 
     def _draw(self, area, cr, width, height):
         fg = fg_color(area)
-        left, top, bottom = 40, 8, 18
+        left, top, bottom = 34, 6, 14
         w, h = width - left, height - top - bottom
         values = [v for e in self.history for v in self.get(e).values() if v is not None]
         vmin, vmax, step = self.scale(values)
@@ -199,31 +203,15 @@ class Chart(Gtk.Box):
                 (cr.line_to if pen else cr.move_to)(x, y)
                 pen = True
             cr.stroke()
-        draw_text(area, cr, left, height - 7, "−5 min", fg, 0.5)
-        draw_text(area, cr, left + w, height - 7, f"jetzt · {self.unit}", fg, 0.5, "right")
+        draw_text(area, cr, left, height - 5, "−5 min", fg, 0.5)
+        draw_text(area, cr, left + w, height - 5, f"jetzt · {self.unit}", fg, 0.5, "right")
 
 
 def nice_scale(values, minimum, steps=(1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 2000, 5000)):
-    """0 bis aufgerundetes Maximum mit höchstens 4 Abschnitten."""
+    """0 bis aufgerundetes Maximum mit höchstens 2 Abschnitten (kompakte Karten)."""
     vmax = max([minimum] + values)
-    step = next((s for s in steps if vmax / s <= 4), steps[-1])
+    step = next((s for s in steps if vmax / s <= 2), steps[-1])
     return 0, math.ceil(vmax / step) * step, step
-
-
-class OverviewPage(Gtk.ScrolledWindow):
-    """Seite mit breitem Diagrammbereich oben und schmaler Einstellungsspalte."""
-
-    def __init__(self, top):
-        super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
-        padded(outer, 24, 12)
-        outer.append(Adw.Clamp(maximum_size=1800, tightening_threshold=1800, child=top))
-        self.col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
-        outer.append(Adw.Clamp(maximum_size=600, tightening_threshold=400, child=self.col))
-        self.set_child(outer)
-
-    def add(self, widget):
-        self.col.append(widget)
 
 
 # --------------------------------------------------------------------------- #
@@ -699,7 +687,7 @@ class ReportDialog(Adw.Dialog):
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="ROG Fan Control")
-        self.set_default_size(820, 900)
+        self.set_default_size(900, 900)
         self.set_size_request(380, 400)  # nötig für Adw.Breakpoint
         self.rpm_hint = 0
         self._updating = False
@@ -764,6 +752,16 @@ class MainWindow(Adw.ApplicationWindow):
         self.banner.connect("button-clicked", lambda *_: self._run_helper(
             ["enable-service"], ok="Hintergrunddienst läuft", after=self._refresh_hints))
         view.add_top_bar(self.banner)
+        view.add_top_bar(self._chart_strip())  # in jedem Tab sichtbar, Inhalt scrollt darunter
+        view.set_top_bar_style(Adw.ToolbarStyle.RAISED)
+
+        # sehr schmal: Seitenumschaltung als Leiste unten, damit die Kopfleiste passt
+        bp = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 560sp"))
+        no_title = GObject.Value(Gtk.Widget)
+        no_title.set_object(None)
+        bp.add_setter(self.header, "title-widget", no_title)
+        bp.add_setter(self.switcher_bar, "reveal", True)
+        self.add_breakpoint(bp)
 
         self.stack.add_titled_with_icon(self._page_overview(), "overview", "Übersicht",
                                         "utilities-system-monitor-symbolic")
@@ -847,65 +845,85 @@ class MainWindow(Adw.ApplicationWindow):
 
     # ------------------------------------------------------------------ Diagramme
 
-    def _charts_section(self):
+    def _chart_strip(self):
+        """Feste Leiste mit vier Diagrammen nebeneinander; bei zu wenig Breite
+        seitlich scrollbar, mit Pfeiltasten links und rechts."""
         cpu, gpu, sys_ = COL["cpu_temp"], COL["gpu_temp"], COL["sys_w"]
         has_gpu = bool(self.gpu_dev)
         temp_s = [("cpu", "CPU", cpu)] + ([("gpu", "GPU", gpu)] if has_gpu else [])
-        watt_s = temp_s + ([("sys", "System (Akku)", sys_)] if hw.has_battery() else [])
-        fan_s = [(f["key"], hw.fan_name(f["key"]).replace("-Lüfter", "").replace(" Lüfter", ""),
-                  fan_color(f["key"])) for f in self.fans if f["has_rpm"]]
-        clk_s = [("cpu", "CPU Ø", cpu), ("cpu_max", "CPU max", (0.55, 0.75, 0.97))]
+        watt_s = temp_s + ([("sys", "Sys", sys_)] if hw.has_battery() else [])
+        short = {"cpu": "CPU", "gpu": "GPU", "mid": "Mitte", "sys": "System"}
+        fan_s = [(f["key"], short.get(f["key"], f"L{f['index']}"), fan_color(f["key"]))
+                 for f in self.fans if f["has_rpm"]]
+        clk_s = [("cpu", "CPU Ø", cpu), ("cpu_max", "max", (0.55, 0.75, 0.97))]
         if has_gpu:
             clk_s.append(("gpu", "GPU", gpu))
         self.charts = [
             Chart(self.history, "Temperatur", "°C", temp_s, lambda e: e["temp"],
-                  lambda v: (20, 100, 20), lambda v: f"{v:.0f} °C"),
-            Chart(self.history, "Lüfterdrehzahl", "U/min", fan_s, lambda e: e["rpm"],
+                  lambda v: (20, 100, 40), lambda v: f"{v:.0f}°"),
+            Chart(self.history, "Lüfter", "U/min", fan_s, lambda e: e["rpm"],
                   lambda v: self._rpm_scale(v), lambda v: f"{v:.0f}",
                   axis_fmt=lambda v: f"{v / 1000:g}k" if v else "0"),
-            Chart(self.history, "Leistungsaufnahme", "W", watt_s, lambda e: e["w"],
+            Chart(self.history, "Leistung", "W", watt_s, lambda e: e["w"],
                   lambda v: nice_scale(v, 50), lambda v: f"{v:.0f} W"),
-            Chart(self.history, "Taktfrequenz", "GHz", clk_s, lambda e: e["ghz"],
-                  lambda v: nice_scale(v, 3, steps=(1, 2, 5)),
-                  lambda v: f"{v:.1f} GHz"),
+            Chart(self.history, "Takt", "GHz", clk_s, lambda e: e["ghz"],
+                  lambda v: nice_scale(v, 3, steps=(1, 2, 5)), lambda v: f"{v:.1f}"),
         ]
-        self.chart_grid = Gtk.Grid(column_spacing=12, row_spacing=12, column_homogeneous=True)
-        self._layout_charts(2)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.append(Gtk.Label(label="Verlauf", xalign=0, css_classes=["heading"]))
-        box.append(Gtk.Label(label="Die letzten 5 Minuten", xalign=0, css_classes=["dim-label"]))
-        box.append(self.chart_grid)
-
-        # Breit: 4 nebeneinander · normal: 2×2 · sehr schmal: untereinander
-        for cond, cols in (("min-width: 1100sp", 4), ("max-width: 560sp", 1)):
-            bp = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(cond))
-            bp.connect("apply", lambda _b, c=cols: self._layout_charts(c))
-            bp.connect("unapply", lambda _b: self._layout_charts(2))
-            if cols == 1:
-                no_title = GObject.Value(Gtk.Widget)
-                no_title.set_object(None)
-                bp.add_setter(self.header, "title-widget", no_title)
-                bp.add_setter(self.switcher_bar, "reveal", True)
-            self.add_breakpoint(bp)
+        row = Gtk.Box(spacing=10, homogeneous=True)
+        padded(row, 3, 3)  # Platz für Kartenrand und Schatten im Scrollbereich
+        for c in self.charts:
+            row.append(c)
+        self.chart_scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+                                               vscrollbar_policy=Gtk.PolicyType.NEVER,
+                                               propagate_natural_height=True,
+                                               hexpand=True, child=row)
+        self.chart_prev = Gtk.Button(icon_name="go-previous-symbolic", valign=Gtk.Align.CENTER,
+                                     css_classes=["circular", "flat"], tooltip_text="Vorheriges Diagramm")
+        self.chart_next = Gtk.Button(icon_name="go-next-symbolic", valign=Gtk.Align.CENTER,
+                                     css_classes=["circular", "flat"], tooltip_text="Nächstes Diagramm")
+        self.chart_prev.connect("clicked", lambda *_: self._scroll_charts(-1))
+        self.chart_next.connect("clicked", lambda *_: self._scroll_charts(1))
+        adj = self.chart_scroll.get_hadjustment()
+        adj.connect("changed", self._update_chart_buttons)
+        adj.connect("value-changed", self._update_chart_buttons)
+        box = Gtk.Box(spacing=4)
+        padded(box, 3, 5)
+        box.append(self.chart_prev)
+        box.append(self.chart_scroll)
+        box.append(self.chart_next)
+        self._update_chart_buttons()
         return box
 
-    def _layout_charts(self, cols):
-        if getattr(self, "_chart_cols", None) == cols:
+    def _update_chart_buttons(self, *_):
+        adj = self.chart_scroll.get_hadjustment()
+        room = adj.get_upper() - adj.get_page_size()
+        overflow = room > 1
+        for b in (self.chart_prev, self.chart_next):
+            b.set_visible(overflow)
+        self.chart_prev.set_sensitive(adj.get_value() > 1)
+        self.chart_next.set_sensitive(adj.get_value() < room - 1)
+
+    def _scroll_charts(self, direction):
+        """Um eine Diagrammbreite weiterblättern (animiert, rastet an Kartenkanten ein)."""
+        adj = self.chart_scroll.get_hadjustment()
+        step = self.charts[0].get_width() + 10  # Kartenbreite + Abstand
+        if step <= 10:
             return
-        self._chart_cols = cols
-        for c in self.charts:
-            if c.get_parent() is not None:
-                self.chart_grid.remove(c)
-        for i, c in enumerate(self.charts):
-            self.chart_grid.attach(c, i % cols, i // cols, 1, 1)
+        room = adj.get_upper() - adj.get_page_size()
+        target = (round(adj.get_value() / step) + direction) * step
+        target = min(max(target, 0), room)
+        self._chart_anim = Adw.TimedAnimation.new(
+            self.chart_scroll, adj.get_value(), target, 250,
+            Adw.CallbackAnimationTarget.new(lambda v: adj.set_value(v)))
+        self._chart_anim.play()
 
     def _rpm_scale(self, values):
         vmax = max([6000, self.rpm_hint] + [v for v in values if v <= hw.MAX_PLAUSIBLE_RPM])
         vmax = math.ceil(vmax / 2000) * 2000
-        return 0, vmax, max(2000, math.ceil(vmax / 4 / 1000) * 1000)
+        return 0, vmax, max(2000, math.ceil(vmax / 2 / 1000) * 1000)
 
     def _page_overview(self):
-        page = OverviewPage(self._charts_section())
+        page = Adw.PreferencesPage()
 
         g = Adw.PreferencesGroup(title="Energieprofil",
                                  description="Entspricht Fn+F5 und dem GNOME-Energiemodus. "
