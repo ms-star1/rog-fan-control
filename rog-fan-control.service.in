@@ -1,0 +1,20 @@
+[Unit]
+Description=ROG Fan Control – eigene Lüfterkurven und Leistungslimits anwenden
+After=tuned.service tuned-ppd.service power-profiles-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I @LIBEXECDIR@/rog-fan-daemon
+Restart=on-failure
+RestartSec=5
+StateDirectory=rog-fan-control
+RuntimeDirectory=rog-fan-control
+RuntimeDirectoryPreserve=yes
+ProtectSystem=strict
+ReadWritePaths=/sys
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

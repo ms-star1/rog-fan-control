@@ -1,0 +1,82 @@
+#!/usr/bin/python3 -I
+"""Hintergrunddienst: hält eigene Lüfterkurven und Leistungslimits aktiv.
+
+* beim Start, nach jeder Konfigurationsänderung und nach jedem Profilwechsel
+  (GNOME-Energiemodus, Fn+F5, tuned) werden Kurven und Limits angewendet;
+* bei jedem Profilwechsel werden vorher die Werkskurven des Profils gesichert;
+* setzt die Firmware die Kurven zurück (z. B. nach Standby), wird nachgesetzt.
+"""
+import os
+import signal
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import rogfan_hw as hw  # noqa: E402
+
+POLL = 2.0
+FIX_COOLDOWN = 10.0
+
+_force = False
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def on_hup(*_):
+    global _force
+    _force = True
+
+
+def config_mtime():
+    try:
+        return os.stat(hw.CONFIG_PATH).st_mtime_ns
+    except OSError:
+        return None
+
+
+def apply(cfg, profile, why, capture=False):
+    with hw.hw_lock():
+        if capture:
+            try:
+                hw.capture_factory(profile)
+            except OSError as e:
+                log(f"Werkskurven für {profile} nicht lesbar: {e}")
+        errors = hw.apply_profile(cfg, profile)
+    active = [f for f in hw.FANS if cfg["profiles"][profile]["curves"][f]["enabled"]]
+    log(f"[{why}] Profil {profile}: eigene Kurven {','.join(active) or 'keine'}"
+        + (f" – Fehler: {'; '.join(errors)}" if errors else ""))
+
+
+def main():
+    global _force
+    signal.signal(signal.SIGHUP, on_hup)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    os.makedirs(hw.RUN_DIR, mode=0o755, exist_ok=True)
+
+    last_profile = None
+    last_mtime = object()
+    last_fix = 0.0
+    while True:
+        profile = hw.read_profile()
+        mtime = config_mtime()
+        if profile in hw.PROFILES:
+            if profile != last_profile:
+                time.sleep(0.5)  # Firmware den Wechsel abschließen lassen
+                apply(hw.load_config(), profile,
+                      "Start" if last_profile is None else "Profilwechsel", capture=True)
+                last_profile, last_mtime = profile, mtime
+            elif mtime != last_mtime or _force:
+                apply(hw.load_config(), profile, "Konfiguration")
+                last_mtime, _force = mtime, False
+            elif time.monotonic() - last_fix > FIX_COOLDOWN:
+                cfg = hw.load_config()
+                if not hw.curves_match(cfg, profile):
+                    apply(cfg, profile, "Nachsetzen")
+                    last_fix = time.monotonic()
+        time.sleep(POLL)
+
+
+if __name__ == "__main__":
+    main()

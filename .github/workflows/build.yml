@@ -1,0 +1,51 @@
+name: Build RPM
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rpm:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Build-Abhängigkeiten installieren
+        run: dnf -y install make sed tar gzip rpm-build rpmlint python3 desktop-file-utils systemd-rpm-macros libxml2
+
+      - uses: actions/checkout@v4
+
+      - name: Tag passt zur Spec-Version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          spec=$(sed -n 's/^Version:[[:space:]]*//p' rog-fan-control.spec)
+          [ "${GITHUB_REF_NAME#v}" = "$spec" ] || { echo "Tag $GITHUB_REF_NAME ≠ Spec-Version $spec"; exit 1; }
+
+      - name: Prüfen
+        run: make check
+
+      - name: RPM bauen
+        run: make rpm
+
+      - name: rpmlint
+        run: rpmlint build/rpm/RPMS/noarch/*.rpm build/rpm/SRPMS/*.rpm || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpms
+          path: |
+            build/rpm/RPMS/noarch/*.rpm
+            build/rpm/SRPMS/*.rpm
+
+      - name: Release anlegen
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/rpm/RPMS/noarch/*.rpm
+            build/rpm/SRPMS/*.rpm
