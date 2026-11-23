@@ -41,6 +41,8 @@ def main(argv):
         with hw.hw_lock():
             errors = hw.apply_profile(cfg, hw.read_profile())
         print(json.dumps({"ok": not errors, "errors": errors}))
+        if errors:
+            print("\n".join(errors), file=sys.stderr)
         sys.exit(2 if errors else 0)
 
     if cmd == "fullspeed":

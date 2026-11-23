@@ -905,6 +905,11 @@ class MainWindow(Adw.ApplicationWindow):
         self._run_helper(["save-config"], stdin=json.dumps(cfg), ok="Gespeichert und angewendet", after=ok)
 
     def _run_helper(self, args, stdin=None, ok=None, on_fail=None, after=None):
+        if not os.path.exists(hw.HELPER):
+            self.toast("Helfer nicht gefunden (App wurde aktualisiert?). Bitte die App schließen und neu starten.")
+            if on_fail:
+                on_fail()
+            return
         flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
         if stdin is not None:
             flags |= Gio.SubprocessFlags.STDIN_PIPE
@@ -925,12 +930,16 @@ class MainWindow(Adw.ApplicationWindow):
             if code == 0:
                 if ok:
                     self.toast(ok)
-            elif code in (126, 127):
-                self.toast("Abgebrochen: keine Berechtigung erteilt")
+            elif code == 126:
+                self.toast("Abgebrochen: Passwortabfrage wurde geschlossen")
+                if on_fail:
+                    on_fail()
+            elif code == 127:
+                self.toast("Nicht berechtigt: " + ((err or "").strip().splitlines() or ["pkexec verweigert"])[-1][:160])
                 if on_fail:
                     on_fail()
             elif code == 2:
-                self.toast("Gespeichert, aber mit Fehlern: " + (err or out).strip()[:200])
+                self.toast("Gespeichert, aber mit Fehlern: " + " · ".join((err or out).strip().splitlines())[:200])
             else:
                 self.toast((err or out).strip()[:200] or f"Fehler (Code {code})")
                 if on_fail:

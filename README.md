@@ -38,3 +38,5 @@ Gemessenes Kernel-Verhalten (7.3): `asus_custom_fan_curve/pwmN_enable` 1 = eigen
 2 = Firmware, 3 = Firmware + Werkskurve laden. Der Kernel prüft Kurven nicht, deshalb
 `validate_curve()`. Ein Profilwechsel schaltet eigene Kurven ab. `asus/pwmN_enable` 0 = Vollgas,
 2 = Auto (GPU/Mitte lesen immer 0 → Zustand in `/run/rog-fan-control/state.json`).
+`asus-armoury` lehnt PL1/PL2-Änderungen ohne aktive eigene Kurve mit EBUSY ab; die App aktiviert
+dafür kurz die Werkskurve des Profils. Gemessen: Volllast 112 W bei PL1 139 → 45 W bei PL1 35/PL2 45.

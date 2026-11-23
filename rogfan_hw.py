@@ -8,6 +8,8 @@ gemeinsam benutzt. Auf dem G614JI mit Kernel 7.3 gemessenes Verhalten:
 * Der Kernel prüft Kurven NICHT (nicht-monoton, 101 °C wird angenommen),
   deshalb validiert validate_curve() selbst.
 * Ein Profilwechsel schaltet eigene Kurven ab -> Dienst setzt sie neu.
+* asus-armoury lehnt PL1/PL2-Änderungen ohne aktive eigene Kurve mit EBUSY ab;
+  apply_limits() aktiviert dafür kurz die Werkskurve (_ppt_unlock).
 * asus/pwmN_enable: 0 = Vollgas, 2 = Automatik. Bei GPU/Mitte liest der Wert
   immer 0, der Zustand wird daher in STATE_PATH mitgeführt.
 """
@@ -379,19 +381,50 @@ def apply_curves(curves):
     return errors
 
 
+@contextlib.contextmanager
+def _ppt_unlock():
+    """Auf dem G614JI lehnt asus-armoury PL1/PL2-Änderungen mit EBUSY ab
+    („PPT change requires an active fan curve“), solange keine eigene Kurve
+    aktiv ist. Dann wird kurz die Werkskurve des aktiven Profils als eigene
+    Kurve aktiviert (gleiches Lüfterverhalten) und danach wieder abgeschaltet.
+    Das gesetzte Limit bleibt dabei erhalten (gemessen)."""
+    d = find_hwmon("asus_custom_fan_curve")
+    unlocked = False
+    if d and not any(_read(f"{d}/pwm{i}_enable") == "1" for i in range(1, len(FANS) + 1)):
+        try:
+            _write(f"{d}/pwm1_enable", 3)  # Werkskurve des aktiven Profils laden
+            _write(f"{d}/pwm1_enable", 1)
+            unlocked = True
+        except OSError:
+            pass
+    try:
+        yield
+    finally:
+        if unlocked:
+            try:
+                _write(f"{d}/pwm1_enable", 3)
+            except OSError:
+                pass
+
+
 def apply_limits(limits):
     info = read_limits()
-    errors = []
+    todo = []
     for name, value in limits.items():
         if name not in info:
             continue
         target = value if value is not None else info[name]["default"]
-        if target == info[name]["current"]:
-            continue
-        try:
-            _write(f"{ARMOURY}/{name}/current_value", target)
-        except OSError as e:
-            errors.append(f"{LIMITS[name][0]}: {e}")
+        if target != info[name]["current"]:
+            todo.append((name, target))
+    if not todo:
+        return []
+    errors = []
+    with _ppt_unlock():
+        for name, target in todo:
+            try:
+                _write(f"{ARMOURY}/{name}/current_value", target)
+            except OSError as e:
+                errors.append(f"{LIMITS[name][0]}: {e.strerror or e}")
     return errors
 
 

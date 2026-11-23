@@ -1,5 +1,5 @@
 Name:           rog-fan-control
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Fan curves, fan modes, power profiles and power limits for ASUS ROG laptops
 License:        LicenseRef-Proprietary
@@ -64,5 +64,9 @@ make check LIBEXECDIR=%{_libexecdir}/%{name}
 %dir %{_sysconfdir}/%{name}
 
 %changelog
+* Mon Nov 23 2026 ms-star1 <294934886+ms-star1@users.noreply.github.com> - 0.1.1-1
+- PL1/PL2 auch ohne eigene Lüfterkurve setzbar (Firmware verlangt aktive Kurve)
+- Klarere Fehlermeldungen für Passwortabfrage, fehlenden Helfer und Schreibfehler
+
 * Mon Nov 23 2026 ms-star1 <294934886+ms-star1@users.noreply.github.com> - 0.1.0-1
 - Erste Version: GUI, pkexec-Helfer, systemd-Dienst
