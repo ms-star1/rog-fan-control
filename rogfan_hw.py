@@ -29,7 +29,7 @@ import platform
 import subprocess
 import time
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 REPO_URL = "https://github.com/ms-star1/rog-fan-control"
 TESTED_DEVICE = "ASUS ROG Strix G16 G614JI (BIOS G614JI.333), Fedora 45, Kernel 7.3.4"
 
@@ -39,6 +39,7 @@ FACTORY_PATH = STATE_DIR + "/factory.json"
 DEVICE_PATH = STATE_DIR + "/device.json"
 RUN_DIR = "/run/rog-fan-control"
 STATE_PATH = RUN_DIR + "/state.json"
+POWER_PATH = RUN_DIR + "/power.json"
 LOCK_PATH = RUN_DIR + "/lock"
 HELPER = os.path.join(os.path.dirname(os.path.realpath(__file__)), "rog-fan-helper")
 SERVICE = "rog-fan-control.service"
@@ -329,6 +330,63 @@ def read_state():
         st = {}
     fs = st.get("fullspeed") if isinstance(st.get("fullspeed"), dict) else {}
     return {"fullspeed": {k: bool(fs.get(k)) for k in fan_keys()}}
+
+
+# --------------------------------------------------------------------------- #
+# Leistungsaufnahme
+# --------------------------------------------------------------------------- #
+
+def rapl_packages():
+    """powercap-Domänen der CPU-Pakete (Intel und AMD, ohne MMIO-Duplikat)."""
+    out = []
+    for d in sorted(glob.glob("/sys/class/powercap/intel-rapl:*")):
+        if d.count(":") == 1 and (_read(f"{d}/name") or "").startswith("package"):
+            out.append(d)
+    return out
+
+
+def read_rapl_energy():
+    """Summe der Paket-Energiezähler in µJ und deren Überlaufgrenze (nur root)."""
+    total, rng = 0, 0
+    pkgs = rapl_packages()
+    for d in pkgs:
+        e = _read_int(f"{d}/energy_uj")
+        if e is None:
+            return None, None
+        total += e
+        rng = max(rng, _read_int(f"{d}/max_energy_range_uj", 0) or 0)
+    return (total, rng) if pkgs else (None, None)
+
+
+def read_power():
+    """Vom Dienst bereitgestellte CPU-Leistung (W), None wenn veraltet/fehlend."""
+    try:
+        with open(POWER_PATH) as f:
+            d = json.load(f)
+        if time.time() - float(d.get("time", 0)) > 4:
+            return None
+        v = d.get("cpu_w")
+        return float(v) if v is not None else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def read_battery_power():
+    """Entladeleistung des Akkus in W (= Systemaufnahme), None im Netzbetrieb."""
+    for b in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+        if _read(f"{b}/status") != "Discharging":
+            continue
+        p = _read_int(f"{b}/power_now")
+        if p is None:
+            c, v = _read_int(f"{b}/current_now"), _read_int(f"{b}/voltage_now")
+            p = c * v // 1_000_000 if c is not None and v is not None else None
+        if p:
+            return abs(p) / 1e6
+    return None
+
+
+def has_battery():
+    return bool(glob.glob("/sys/class/power_supply/BAT*"))
 
 
 def load_device():

@@ -7,8 +7,10 @@
 * setzt die Firmware die Kurven zurück (z. B. nach Standby), wird nachgesetzt.
 """
 import os
+import json
 import signal
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -52,11 +54,43 @@ def apply(cfg, profile, why, capture=False):
         + (f" – Fehler: {'; '.join(errors)}" if errors else ""))
 
 
+def power_sampler():
+    """Rechnet die RAPL-Zähler (nur root lesbar) in ein Sekundenmittel um und
+    stellt es der App in POWER_PATH bereit. Ein 1-s-Mittel ist zu grob für
+    Seitenkanal-Angriffe, für die der Zugriff ursprünglich gesperrt wurde."""
+    last_e, last_t = hw.read_rapl_energy()[0], time.monotonic()
+    if last_e is None:
+        log("Keine RAPL-Zähler gefunden – CPU-Leistung wird nicht angezeigt.")
+        return
+    while True:
+        time.sleep(1.0)
+        e, rng = hw.read_rapl_energy()
+        t = time.monotonic()
+        if e is None:
+            continue
+        de = e - last_e
+        if de < 0 and rng:
+            de += rng  # Zählerüberlauf
+        watts = de / 1e6 / (t - last_t) if t > last_t else None
+        last_e, last_t = e, t
+        if watts is None or not 0 <= watts < 1000:
+            continue
+        try:
+            tmp = hw.POWER_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"time": time.time(), "cpu_w": round(watts, 1)}, f)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, hw.POWER_PATH)
+        except OSError:
+            pass
+
+
 def main():
     global _force
     signal.signal(signal.SIGHUP, on_hup)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     os.makedirs(hw.RUN_DIR, mode=0o755, exist_ok=True)
+    threading.Thread(target=power_sampler, daemon=True).start()
 
     last_profile = None
     last_mtime = object()

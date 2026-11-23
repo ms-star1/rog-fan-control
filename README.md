@@ -44,9 +44,16 @@ Rückmeldungen per Issue sind willkommen, am besten mit dem **Gerätebericht** a
   - optional: misst die Höchstdrehzahl jedes Lüfters (je bis zu 25 s Vollgas, laut), prüft, ob
     Vollgas wirkt, und erkennt Firmware-Eigenheiten wie falsche Drehzahlwerte
   - erstellt einen **Gerätebericht** zum Kopieren in ein Issue (nur Hardware- und Treiberdaten)
-- **Übersicht:** Live-Verlauf (5 Minuten) von CPU- und GPU-Temperatur und allen Lüftern, Drehzahl
-  auch in % der gemessenen Höchstdrehzahl. Die GPU-Temperatur wird nur abgefragt, wenn die GPU
-  ohnehin wach ist, damit sie schlafen kann.
+- **Übersicht:** Live-Verlauf (5 Minuten) von Temperatur, Leistungsaufnahme und Lüfterdrehzahl,
+  Drehzahl auch in % der gemessenen Höchstdrehzahl. Die GPU wird nur abgefragt, wenn sie ohnehin
+  wach ist, damit sie schlafen kann.
+- **Leistungsaufnahme in Watt:**
+  - CPU-Paket aus den RAPL-Energiezählern. Diese darf nur root lesen (Schutz vor dem
+    Seitenkanal-Angriff „PLATYPUS“). Der Dienst stellt deshalb ein **Sekundenmittel** in
+    `/run/rog-fan-control/power.json` bereit, das für solche Angriffe zu grob ist.
+  - GPU über `nvidia-smi`, wenn die GPU wach ist (sonst ≈0 W).
+  - Gesamtsystem nur im Akkubetrieb, über die Entladeleistung des Akkus. Am Netzteil hat das
+    Testgerät keine Messstelle.
 - **Lasttest:** CPU, GPU oder beides voll auslasten, um Kurven und Limits zu prüfen. CPU-Last mit
   einem Prozess pro Thread, GPU-Last mit einem kleinen CUDA-Rechenkern direkt über den
   NVIDIA-Treiber (`libcuda`, keine Zusatzpakete). Stoppt automatisch nach 1–30 Minuten und beim

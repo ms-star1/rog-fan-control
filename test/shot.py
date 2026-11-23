@@ -54,5 +54,5 @@ def step(i=0):
     return False
 
 
-app.connect("activate", lambda *_: GLib.timeout_add(2000, step, 0))
+app.connect("activate", lambda *_: GLib.timeout_add(int(os.environ.get("SHOT_DELAY", "2000")), step, 0))
 app.run([])

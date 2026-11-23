@@ -38,6 +38,9 @@ PASSWORD_TEXT = (
 COL = {
     "cpu_temp": (0.21, 0.52, 0.89),
     "gpu_temp": (0.90, 0.38, 0.00),
+    "cpu_w": (0.21, 0.52, 0.89),
+    "gpu_w": (0.90, 0.38, 0.00),
+    "sys_w": (0.57, 0.25, 0.67),
     "accent": (0.21, 0.52, 0.89),
     "factory": (0.55, 0.55, 0.55),
     "warn": (0.88, 0.11, 0.14),
@@ -131,15 +134,15 @@ def draw_text(widget, cr, x, y, text, rgb, alpha=1.0, align="left"):
 # --------------------------------------------------------------------------- #
 
 class LiveGraph(Gtk.DrawingArea):
-    """Zwei übereinanderliegende Verläufe: Temperaturen und Drehzahlen.
+    """Drei übereinanderliegende Verläufe: Temperaturen, Leistung, Drehzahlen.
 
-    history: deque von (zeit, cpu_temp, gpu_temp, {lüfter: rpm})"""
+    history: deque von (zeit, cpu_temp, gpu_temp, {lüfter: rpm}, {cpu/gpu/sys: watt})"""
 
     def __init__(self, history):
         super().__init__()
         self.history = history
         self.rpm_hint = 0  # gemessene Höchstdrehzahl (Einrichtung)
-        self.set_content_height(260)
+        self.set_content_height(390)
         self.set_hexpand(True)
         self.set_draw_func(self._draw)
 
@@ -152,7 +155,7 @@ class LiveGraph(Gtk.DrawingArea):
             cr.move_to(x0, y)
             cr.line_to(x0 + w, y)
             cr.stroke()
-            label = f"{v / 1000:g}k" if unit == "RPM" and v else f"{int(v)}"
+            label = f"{v / 1000:g}k" if unit == "RPM" and v else f"{v:g}"
             draw_text(self, cr, x0 - 6, y, label, fg, 0.6, "right")
             v += step
         draw_text(self, cr, x0, y0 - 14, unit, fg, 0.6)
@@ -178,8 +181,8 @@ class LiveGraph(Gtk.DrawingArea):
 
     def _draw(self, _area, cr, width, height):
         fg = fg_color(self)
-        left, right, top, gap, bottom = 44, 8, 22, 44, 18
-        ph = (height - top - gap - bottom) / 2
+        left, right, top, gap, bottom = 44, 8, 22, 40, 18
+        ph = (height - top - 2 * gap - bottom) / 3
         pw = width - left - right
 
         self._grid(cr, left, top, pw, ph, fg, 20, 100, 20, "°C")
@@ -187,7 +190,17 @@ class LiveGraph(Gtk.DrawingArea):
             pts = [(e[0], e[idx]) for e in self.history if e[idx] is not None]
             self._line(cr, left, top, pw, ph, 20, 100, pts, COL[key])
 
-        y0 = top + ph + gap
+        yw = top + ph + gap
+        watts = [w for e in self.history for w in e[4].values() if w is not None]
+        wmax = max(50, max(watts, default=0))
+        wstep = next(s for s in (10, 25, 50, 100, 200) if wmax / s <= 4)
+        wmax = math.ceil(wmax / wstep) * wstep
+        self._grid(cr, left, yw, pw, ph, fg, 0, wmax, wstep, "W")
+        for key in ("cpu", "gpu", "sys"):
+            pts = [(e[0], e[4].get(key)) for e in self.history if e[4].get(key) is not None]
+            self._line(cr, left, yw, pw, ph, 0, wmax, pts, COL[f"{key}_w"])
+
+        y0 = yw + ph + gap
         rpms = [r for e in self.history for r in e[3].values()
                 if r is not None and r <= hw.MAX_PLAUSIBLE_RPM]
         vmax = max(6000, self.rpm_hint, max(rpms, default=0))
@@ -681,6 +694,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.history = deque(maxlen=HISTORY_SECONDS)
         self.gpu_dev = hw.find_nvidia_gpu()
         self.gpu_temp = None
+        self.gpu_power = None
         self.gpu_temp_time = 0
         self._gpu_busy = False
         self._ppd = None
@@ -819,12 +833,17 @@ class MainWindow(Adw.ApplicationWindow):
 
         g = Adw.PreferencesGroup(title="Verlauf", description="Die letzten 5 Minuten")
         legend = Gtk.Label(xalign=0, use_markup=True, wrap=True, css_classes=["caption"])
-        items = [(COL["cpu_temp"], "CPU-Temp.")]
+
+        def dots(items):
+            return "   ".join(f"<span foreground='{hexcol(c)}'>●</span> {GLib.markup_escape_text(t)}"
+                               for c, t in items)
+        comp = [(COL["cpu_temp"], "CPU")]
         if self.gpu_dev:
-            items.append((COL["gpu_temp"], "GPU-Temp."))
-        items += [(fan_color(f["key"]), hw.fan_name(f["key"])) for f in self.fans if f["has_rpm"]]
-        legend.set_markup("   ".join(f"<span foreground='{hexcol(c)}'>●</span> {GLib.markup_escape_text(t)}"
-                                     for c, t in items))
+            comp.append((COL["gpu_temp"], "GPU"))
+        if hw.has_battery():
+            comp.append((COL["sys_w"], "System (nur im Akkubetrieb)"))
+        fans = [(fan_color(f["key"]), hw.fan_name(f["key"])) for f in self.fans if f["has_rpm"]]
+        legend.set_markup(f"<b>°C / W:</b>  {dots(comp)}\n<b>RPM:</b>  {dots(fans)}")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, css_classes=["card"])
         self.graph = LiveGraph(self.history)
         self.graph.set_margin_top(12)
@@ -866,7 +885,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         g = Adw.PreferencesGroup(
             title="Lasttest",
-            description="Erzeugt Volllast, um Lüfterkurven und Limits zu prüfen. Temperaturen und "
+            description="Erzeugt Volllast, um Lüfterkurven und Limits zu prüfen. Temperatur, Leistung und "
                         "Drehzahlen siehst du oben im Verlauf. Die Firmware schützt weiterhin vor "
                         "Überhitzung. Der Test stoppt automatisch und beim Schließen der App.")
         self.load_toggle = self._toggle_group(LOAD_MODES)
@@ -887,7 +906,7 @@ class MainWindow(Adw.ApplicationWindow):
                                 subtitle="Dafür wird eine NVIDIA-GPU mit proprietärem Treiber (libcuda) benötigt."))
         page.add(g)
 
-        g = Adw.PreferencesGroup(title="Temperaturen")
+        g = Adw.PreferencesGroup(title="Temperaturen und Leistung")
         self.cpu_temp_row = Adw.ActionRow(title="CPU (Package)")
         self.cpu_temp_lbl = Gtk.Label(css_classes=["numeric", "title-4"])
         self.cpu_temp_row.add_suffix(self.cpu_temp_lbl)
@@ -896,6 +915,10 @@ class MainWindow(Adw.ApplicationWindow):
         self.gpu_temp_lbl = Gtk.Label(css_classes=["numeric", "title-4"])
         self.gpu_temp_row.add_suffix(self.gpu_temp_lbl)
         g.add(self.gpu_temp_row)
+        self.sys_row = Adw.ActionRow(title="System gesamt", visible=hw.has_battery())
+        self.sys_lbl = Gtk.Label(css_classes=["numeric", "title-4"])
+        self.sys_row.add_suffix(self.sys_lbl)
+        g.add(self.sys_row)
         page.add(g)
 
         self.hint_group = Adw.PreferencesGroup(title="Hinweise")
@@ -1020,17 +1043,29 @@ class MainWindow(Adw.ApplicationWindow):
             if time.monotonic() - self.gpu_temp_time > 3:
                 self._poll_gpu()
         else:
-            self.gpu_temp = None
-        self.history.append((time.monotonic(), cpu, self.gpu_temp, rpms))
+            self.gpu_temp = self.gpu_power = None
+        cpu_w = hw.read_power()
+        bat_w = hw.read_battery_power()
+        gpu_w = self.gpu_power if gpu_state == "active" else (0.0 if self.gpu_dev else None)
+        self.history.append((time.monotonic(), cpu, self.gpu_temp, rpms,
+                             {"cpu": cpu_w, "gpu": gpu_w, "sys": bat_w}))
         self.graph.queue_draw()
 
         self.cpu_temp_lbl.set_label(f"{cpu:.0f} °C" if cpu is not None else "–")
+        self.cpu_temp_row.set_subtitle(f"{cpu_w:.1f} W" if cpu_w is not None else
+                                       "Leistung: Hintergrunddienst liefert keine Werte")
         if gpu_state == "active":
             self.gpu_temp_lbl.set_label(f"{self.gpu_temp:.0f} °C" if self.gpu_temp is not None else "…")
-            self.gpu_temp_row.set_subtitle("")
+            self.gpu_temp_row.set_subtitle(f"{self.gpu_power:.1f} W" if self.gpu_power is not None else "")
         else:
             self.gpu_temp_lbl.set_label("–")
-            self.gpu_temp_row.set_subtitle("Im Energiesparmodus: wird nicht abgefragt, damit sie schlafen kann")
+            self.gpu_temp_row.set_subtitle("Schläft (≈0 W) – wird nicht abgefragt, damit sie schlafen kann")
+        if bat_w is not None:
+            self.sys_lbl.set_label(f"{bat_w:.1f} W")
+            self.sys_row.set_subtitle("Entladeleistung des Akkus")
+        else:
+            self.sys_lbl.set_label("–")
+            self.sys_row.set_subtitle("Am Netzteil nicht messbar, nur im Akkubetrieb")
 
         state = hw.read_state()["fullspeed"]
         self._updating = True
@@ -1070,7 +1105,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._gpu_busy = True
         try:
             proc = Gio.Subprocess.new(
-                ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+                ["nvidia-smi", "--query-gpu=temperature.gpu,power.draw", "--format=csv,noheader,nounits"],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
         except GLib.Error:
             self._gpu_busy = False
@@ -1081,9 +1116,14 @@ class MainWindow(Adw.ApplicationWindow):
             self.gpu_temp_time = time.monotonic()
             try:
                 _, out, _ = p.communicate_utf8_finish(res)
-                self.gpu_temp = float(out.strip().splitlines()[0])
+                parts = [x.strip() for x in out.strip().splitlines()[0].split(",")]
+                self.gpu_temp = float(parts[0])
+                try:
+                    self.gpu_power = float(parts[1])
+                except (IndexError, ValueError):
+                    self.gpu_power = None
             except (GLib.Error, ValueError, IndexError):
-                self.gpu_temp = None
+                self.gpu_temp = self.gpu_power = None
         proc.communicate_utf8_async(None, None, done)
 
     # ------------------------------------------------------------------ Hinweise
