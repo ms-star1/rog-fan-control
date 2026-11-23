@@ -38,13 +38,16 @@ def config_mtime():
 
 def apply(cfg, profile, why, capture=False):
     with hw.hw_lock():
+        now = hw.read_profile()  # beim Warten auf die Sperre kann sich das Profil geändert haben
+        if now != profile and now in cfg["profiles"]:
+            profile = now
         if capture:
             try:
                 hw.capture_factory(profile)
             except OSError as e:
                 log(f"Werkskurven für {profile} nicht lesbar: {e}")
         errors = hw.apply_profile(cfg, profile)
-    active = [f for f in hw.FANS if cfg["profiles"][profile]["curves"][f]["enabled"]]
+    active = [f for f, c in cfg["profiles"].get(profile, {}).get("curves", {}).items() if c["enabled"]]
     log(f"[{why}] Profil {profile}: eigene Kurven {','.join(active) or 'keine'}"
         + (f" – Fehler: {'; '.join(errors)}" if errors else ""))
 
@@ -61,7 +64,7 @@ def main():
     while True:
         profile = hw.read_profile()
         mtime = config_mtime()
-        if profile in hw.PROFILES:
+        if profile in hw.profiles():
             if profile != last_profile:
                 time.sleep(0.5)  # Firmware den Wechsel abschließen lassen
                 apply(hw.load_config(), profile,

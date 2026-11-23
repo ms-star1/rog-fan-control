@@ -11,7 +11,7 @@ SYSCONFDIR ?= /etc
 DESTDIR    ?=
 
 PY        := rogfan_hw.py rog_fan_gui.py
-EXE       := rog-fan-helper rog-fan-daemon
+EXE       := rog-fan-helper rog-fan-daemon rog-fan-load
 APPID     := org.local.RogFanControl
 GENERATED := build/$(NAME) build/$(NAME).service build/org.local.rogfancontrol.policy
 DISTFILES := Makefile $(NAME).spec README.md LICENSE $(PY) $(EXE) $(NAME).service.in \
@@ -37,6 +37,7 @@ check: all
 	desktop-file-validate $(APPID).desktop
 	@if command -v xmllint >/dev/null; then xmllint --noout build/org.local.rogfancontrol.policy $(APPID).svg; fi
 	! grep -n '@[A-Z]*@' $(GENERATED)
+	grep -q '^APP_VERSION = "$(VERSION)"' rogfan_hw.py || { echo 'APP_VERSION in rogfan_hw.py passt nicht zur Spec ($(VERSION))'; exit 1; }
 
 install: all
 	install -d -m 755 $(DESTDIR)$(LIBEXECDIR)

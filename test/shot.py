@@ -1,28 +1,58 @@
-"""Startet die GUI, rendert jede Seite als PNG und beendet sich."""
-import sys, runpy
-sys.argv = ["rog-fan-control"]
-HERE = __import__("os").path.dirname(__import__("os").path.abspath(__file__))
-REPO = __import__("os").path.dirname(HERE)
+"""Startet die GUI aus dem Projektordner und rendert einige Ansichten als PNG.
+
+Aufruf: XDG_CONFIG_HOME=test/cfg python3 test/shot.py [ansicht ...]
+Ansichten: overview, overview_tall, curves, limits, setup, password
+"""
+import os
+import runpy
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO)
+views = sys.argv[1:] or ["overview", "curves", "limits"]
+sys.argv = ["rog-fan-control"]
 mod = runpy.run_path(REPO + "/rog_fan_gui.py", run_name="gui")
-from gi.repository import GLib, Gtk
-App = mod["App"]
-out = HERE
-app = App()
-pages = ["overview", "curves", "limits"]
-def shoot(i=0):
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
+
+app = mod["App"]()
+app.set_flags(app.get_flags() | Gio.ApplicationFlags.NON_UNIQUE)
+state = {"dialog": None}
+
+
+def snap(win, name):
+    p = Gtk.WidgetPaintable(widget=win)
+    s = Gtk.Snapshot()
+    p.snapshot(s, win.get_width(), win.get_height())
+    win.get_renderer().render_texture(s.to_node(), None).save_to_png(f"{HERE}/{name}.png")
+
+
+def prepare(win, view):
+    if state["dialog"]:
+        state["dialog"].force_close()
+        state["dialog"] = None
+    win.set_default_size(780, 1500 if view == "overview_tall" else 860)
+    if view in ("overview", "overview_tall", "curves", "limits"):
+        win.stack.set_visible_child_name(view.replace("_tall", ""))
+    elif view == "setup":
+        d = mod["SetupDialog"](win, False)
+        d.present(win)
+        state["dialog"] = d
+    elif view == "password":
+        win._password_info()
+
+
+def step(i=0):
     win = app.props.active_window
     if i > 0:
-        p = Gtk.WidgetPaintable(widget=win)
-        snap = Gtk.Snapshot()
-        p.snapshot(snap, win.get_width(), win.get_height())
-        tex = win.get_renderer().render_texture(snap.to_node(), None)
-        tex.save_to_png(f"{out}/{pages[i-1]}.png")
-    if i < len(pages):
-        win.stack.set_visible_child_name(pages[i])
-        GLib.timeout_add(2500, shoot, i + 1)
+        snap(win, views[i - 1])
+    if i < len(views):
+        prepare(win, views[i])
+        GLib.timeout_add(2000, step, i + 1)
     else:
         app.quit()
     return False
-app.connect("activate", lambda *_: GLib.timeout_add(4000, shoot, 0))
+
+
+app.connect("activate", lambda *_: GLib.timeout_add(2000, step, 0))
 app.run([])

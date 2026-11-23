@@ -2,16 +2,21 @@
 """Privilegierter Helfer für ROG Fan Control (wird per pkexec gestartet).
 
 Befehle:
-  save-config            JSON auf stdin -> prüfen, speichern, aktives Profil anwenden
-  fullspeed FAN on|off   Lüfter (cpu|gpu|mid) auf Vollgas / Automatik
-  capture-factory        Werkskurven des aktiven Profils neu einlesen
-  set-profile PROFIL     platform_profile direkt setzen (Fallback ohne PowerProfiles-Dienst)
-  enable-service         Hintergrunddienst aktivieren und starten
+  save-config              JSON auf stdin -> prüfen, speichern, aktives Profil anwenden
+  fullspeed FAN on|off     Lüfter (siehe Erkennung) auf Vollgas / Automatik
+  capture-factory          Werkskurven des aktiven Profils neu einlesen
+  set-profile PROFIL       platform_profile direkt setzen (Fallback ohne PowerProfiles-Dienst)
+  enable-service           Hintergrunddienst aktivieren und starten
+  setup [factory] [maxrpm] Einrichtung: Erkennung, PL-Test, optional Werkskurven aller
+                           Profile und Höchstdrehzahl. Fortschritt als JSON-Zeilen auf stdout.
 """
+import datetime
+import errno
 import json
 import os
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import rogfan_hw as hw  # noqa: E402
@@ -21,6 +26,157 @@ def fail(msg, code=1):
     print(msg, file=sys.stderr)
     sys.exit(code)
 
+
+def emit(**kw):
+    print(json.dumps(kw), flush=True)
+
+
+# --------------------------------------------------------------------------- #
+# Einrichtung
+# --------------------------------------------------------------------------- #
+
+def test_ppt():
+    """Schreibt den aktuellen PL-Wert zurück. Ergebnis None = nicht prüfbar."""
+    info = hw.read_limits()
+    name = next((n for n in hw.PPT_LIMITS if n in info), None)
+    if not name:
+        return None, "Keine CPU-Leistungslimits vorhanden."
+    path = f"{hw.ARMOURY}/{name}/current_value"
+    d = hw.find_hwmon("asus_custom_fan_curve")
+    if d and any(hw._read(f"{d}/pwm{f['index']}_enable") == "1" for f in hw.detect_fans()):
+        return None, "PL-Test nicht möglich, weil gerade eine eigene Kurve aktiv ist."
+    try:
+        hw._write(path, info[name]["current"])
+        return False, "Leistungslimits lassen sich direkt ändern."
+    except OSError as e:
+        if e.errno != errno.EBUSY:
+            return None, f"Leistungslimits: Schreibfehler ({e.strerror})."
+    try:
+        hw.write_limit(name, info[name]["current"])
+        return True, "Firmware verlangt für Leistungslimits eine aktive Kurve – Umgehung funktioniert."
+    except OSError as e:
+        return True, f"Firmware verlangt für Leistungslimits eine aktive Kurve – Umgehung fehlgeschlagen ({e.strerror})."
+
+
+def measure_fan(key, log):
+    """Lüfter auf Vollgas, bis die Drehzahl stabil ist; danach zurück."""
+    before = hw.read_state()["fullspeed"].get(key, False)
+    base = hw._clean_rpm(hw.read_fan_raw(key)) or 0
+    samples, bit15 = [], False
+    hw.set_fullspeed(key, True, remember=False)
+    try:
+        start = time.monotonic()
+        while time.monotonic() - start < 25:
+            time.sleep(0.5)
+            raw = hw.read_fan_raw(key)
+            if raw is not None and (raw // 100) & 0x8000:
+                bit15 = True
+            rpm = hw._clean_rpm(raw)
+            if rpm is None:
+                continue
+            samples.append(rpm)
+            last = samples[-6:]
+            if (time.monotonic() - start > 6 and len(last) == 6
+                    and max(last) - min(last) <= 100 and max(last) > 0):
+                break
+    finally:
+        if not before:
+            hw.set_fullspeed(key, False, remember=False)
+    peak = max(samples, default=0)
+    effective = peak > base + 300
+    log(f"{hw.fan_name(key)}: {base} → {peak} U/min" + ("" if effective else " (Vollgas ohne Wirkung)"))
+    return {"max_rpm": peak if effective else None, "fullspeed_effective": effective, "bit15": bit15}
+
+
+def setup(opts):
+    steps = 2 + ("factory" in opts) + ("maxrpm" in opts)
+    done = [0]
+
+    def step(msg):
+        emit(progress=done[0] / steps, step=msg)
+        done[0] += 1
+
+    def log(msg):
+        emit(log=msg)
+
+    old = hw.load_device() or {}
+    device = {
+        "version": 1,
+        "created": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "fans": {k: dict(v) for k, v in (old.get("fans") or {}).items() if isinstance(v, dict)},
+        "quirks": dict(old.get("quirks") or {}),
+        "factory_profiles": list(old.get("factory_profiles") or []),
+    }
+
+    step("Gerät erkennen")
+    comp = hw.compatibility()
+    device.update({"dmi": comp["dmi"], "kernel": comp["kernel"], "verdict": comp["verdict"],
+                   "profiles": comp["profiles"], "limits": list(comp["limits"])})
+    for f in comp["fans"]:
+        device["fans"].setdefault(f["key"], {}).update(
+            {k: f[k] for k in ("index", "label", "curve_points", "fullspeed")})
+    log(f"{comp['dmi']['product_name'] or 'Unbekanntes Gerät'}: {len(comp['fans'])} Lüfter, "
+        f"Profile: {', '.join(hw.profile_name(p) for p in comp['profiles'])}")
+    if comp["verdict"] == "incompatible":
+        log("Keine ASUS-Lüfterschnittstellen gefunden – Gerät wird nicht unterstützt.")
+
+    with hw.hw_lock():
+        step("Leistungslimits prüfen")
+        needs, msg = test_ppt()
+        if needs is not None or "ppt_needs_curve" not in device["quirks"]:
+            device["quirks"]["ppt_needs_curve"] = needs
+        log(msg)
+
+        if "factory" in opts:
+            step("Werkskurven aller Profile einlesen")
+            orig = hw.read_profile()
+            got = []
+            if not hw.curve_fans():
+                log("Keine Kurven-Schnittstelle – übersprungen.")
+            else:
+                for p in hw.profiles():
+                    if p != "default" and not hw.switch_profile(p):
+                        log(f"{hw.profile_name(p)}: Profilwechsel nicht stabil – übersprungen.")
+                        continue
+                    if hw.capture_factory(p) is None:
+                        log(f"{hw.profile_name(p)}: Profil wechselte beim Einlesen – übersprungen.")
+                        continue
+                    got.append(p)
+                    log(f"{hw.profile_name(p)}: Werkskurven gesichert.")
+                if orig != hw.read_profile():
+                    hw.switch_profile(orig)
+                log(f"Zurück im Profil {hw.profile_name(hw.read_profile())}.")
+            order = hw.profiles()
+            device["factory_profiles"] = sorted(set(device["factory_profiles"]) | set(got),
+                                                key=lambda x: order.index(x) if x in order else 99)
+            for e in hw.apply_profile(hw.load_config(), hw.read_profile()):
+                log(f"Fehler beim Wiederherstellen: {e}")
+
+        if "maxrpm" in opts:
+            step("Höchstdrehzahlen messen")
+            bit15 = set(device["quirks"].get("rpm_bit15_fans") or [])
+            for f in hw.detect_fans():
+                if not (f["fullspeed"] and f["has_rpm"]):
+                    log(f"{hw.fan_name(f['key'])}: Vollgas oder Drehzahl nicht verfügbar – übersprungen.")
+                    continue
+                emit(step=f"Höchstdrehzahl: {hw.fan_name(f['key'])} (läuft auf Vollgas)")
+                try:
+                    r = measure_fan(f["key"], log)
+                except OSError as e:
+                    log(f"{hw.fan_name(f['key'])}: {e}")
+                    continue
+                device["fans"][f["key"]].update(
+                    {"max_rpm": r["max_rpm"], "fullspeed_effective": r["fullspeed_effective"]})
+                if r["bit15"]:
+                    bit15.add(f["key"])
+            device["quirks"]["rpm_bit15_fans"] = sorted(bit15)
+            hw.reassert_fullspeed()
+
+    hw._atomic_write_json(hw.DEVICE_PATH, device)
+    emit(progress=1.0, step="Fertig", done=True)
+
+
+# --------------------------------------------------------------------------- #
 
 def main(argv):
     if os.geteuid() != 0:
@@ -46,8 +202,8 @@ def main(argv):
         sys.exit(2 if errors else 0)
 
     if cmd == "fullspeed":
-        if len(args) != 2 or args[0] not in hw.FANS or args[1] not in ("on", "off"):
-            fail("Aufruf: fullspeed cpu|gpu|mid on|off")
+        if len(args) != 2 or args[0] not in hw.fan_keys() or args[1] not in ("on", "off"):
+            fail(f"Aufruf: fullspeed {'|'.join(hw.fan_keys())} on|off")
         with hw.hw_lock():
             try:
                 hw.set_fullspeed(args[0], args[1] == "on")
@@ -78,6 +234,17 @@ def main(argv):
                            capture_output=True, text=True)
         if r.returncode:
             fail(r.stderr.strip() or "systemctl fehlgeschlagen")
+        return
+
+    if cmd == "setup":
+        bad = [a for a in args if a not in ("factory", "maxrpm")]
+        if bad:
+            fail(f"Unbekannte Option: {' '.join(bad)}")
+        try:
+            setup(set(args))
+        except Exception as e:  # die Fortschrittsanzeige soll den Fehler sehen
+            emit(error=f"{type(e).__name__}: {e}")
+            sys.exit(1)
         return
 
     fail(f"Unbekannter Befehl: {cmd}")

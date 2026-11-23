@@ -6,8 +6,8 @@
   <action id="org.local.rogfancontrol.helper">
     <description>Change fan curves, fan modes and power limits</description>
     <description xml:lang="de">Lüfterkurven, Lüftermodi und Leistungslimits ändern</description>
-    <message>Authentication is required to change fan and power settings</message>
-    <message xml:lang="de">Zum Ändern der Lüfter- und Leistungseinstellungen ist eine Authentifizierung nötig</message>
+    <message>ROG Fan Control wants to change fan curves, fan modes or power limits. Only an administrator may change these firmware settings.</message>
+    <message xml:lang="de">ROG Fan Control möchte Lüfterkurven, Lüftermodi oder Leistungslimits ändern. Diese Firmware-Einstellungen darf nur ein Administrator setzen.</message>
     <icon_name>org.local.RogFanControl</icon_name>
     <defaults>
       <allow_any>no</allow_any>

@@ -1,0 +1,172 @@
+#!/usr/bin/python3 -I
+"""Lasttest für ROG Fan Control (läuft als normaler Benutzer, kein root).
+
+Aufruf: rog-fan-load cpu|gpu|all [SEKUNDEN]
+
+* cpu: ein Rechenprozess pro logischem Kern
+* gpu: CUDA-Rechenkern über den NVIDIA-Treiber (libcuda, PTX wird vom Treiber
+  übersetzt) – keine Zusatzpakete nötig
+* all: beides gleichzeitig
+
+Endet nach SEKUNDEN (Standard 300), bei SIGTERM/SIGINT oder wenn der
+aufrufende Prozess (die App) verschwindet. Meldungen als JSON-Zeilen.
+"""
+import ctypes
+import json
+import multiprocessing as mp
+import os
+import signal
+import sys
+import threading
+import time
+
+PTX = rb"""
+.version 7.0
+.target sm_52
+.address_size 64
+
+.visible .entry burn(.param .u64 out, .param .u32 iters)
+{
+    .reg .pred p;
+    .reg .f32 a, b, c;
+    .reg .u32 i, n, tid;
+    .reg .u64 ptr, off;
+
+    ld.param.u64 ptr, [out];
+    ld.param.u32 n, [iters];
+    mov.u32 tid, %tid.x;
+    cvt.rn.f32.u32 a, tid;
+    mov.f32 b, 0f3F7FFFFE;
+    mov.f32 c, 0f3DCCCCCD;
+    mov.u32 i, 0;
+LOOP:
+    fma.rn.f32 a, a, b, c;
+    fma.rn.f32 c, c, b, a;
+    fma.rn.f32 a, a, b, c;
+    fma.rn.f32 c, c, b, a;
+    add.u32 i, i, 1;
+    setp.lt.u32 p, i, n;
+    @p bra LOOP;
+    add.f32 a, a, c;
+    cvta.to.global.u64 ptr, ptr;
+    mul.wide.u32 off, tid, 4;
+    add.u64 ptr, ptr, off;
+    st.global.f32 [ptr], a;
+    ret;
+}
+"""
+
+
+def emit(**kw):
+    print(json.dumps(kw), flush=True)
+
+
+def cpu_worker():
+    os.nice(5)  # Oberfläche bleibt bedienbar, Last bleibt bei 100 %
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+    x = 0.0
+    while True:
+        for i in range(100000):
+            x = (x + i * 1.0000001) % 1e9
+
+
+class Cuda:
+    def __init__(self):
+        self.lib = ctypes.CDLL("libcuda.so.1")
+        self.lib.cuGetErrorName.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)]
+
+    def __call__(self, name, *args):
+        rc = getattr(self.lib, name)(*args)
+        if rc:
+            s = ctypes.c_char_p()
+            self.lib.cuGetErrorName(rc, ctypes.byref(s))
+            raise RuntimeError(f"{name}: {(s.value or b'?').decode()}")
+
+
+def gpu_init():
+    cu = Cuda()
+    dev, ctx, mod, fn = ctypes.c_int(), ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
+    out = ctypes.c_uint64()
+    cu("cuInit", 0)
+    cu("cuDeviceGet", ctypes.byref(dev), 0)
+    name = ctypes.create_string_buffer(128)
+    cu("cuDeviceGetName", name, 128, dev)
+    # 0x04 = CU_CTX_SCHED_BLOCKING_SYNC: warten belegt keinen CPU-Kern
+    cu("cuCtxCreate_v2", ctypes.byref(ctx), 0x04, dev)
+    cu("cuModuleLoadData", ctypes.byref(mod), ctypes.c_char_p(PTX))
+    cu("cuModuleGetFunction", ctypes.byref(fn), mod, b"burn")
+    cu("cuMemAlloc_v2", ctypes.byref(out), ctypes.c_size_t(256 * 4))
+    return cu, ctx, fn, out, name.value.decode(errors="replace")
+
+
+def gpu_loop(cu, ctx, fn, out, stop):
+    cu("cuCtxSetCurrent", ctx)  # Kontext gilt pro Thread
+    iters = ctypes.c_uint32(400000)
+    params = (ctypes.c_void_p * 2)(ctypes.cast(ctypes.byref(out), ctypes.c_void_p),
+                                   ctypes.cast(ctypes.byref(iters), ctypes.c_void_p))
+    while not stop.is_set():
+        cu("cuLaunchKernel", fn, 2048, 1, 1, 256, 1, 1, 0, None, params, None)
+        cu("cuCtxSynchronize")
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if mode not in ("cpu", "gpu", "all"):
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    try:
+        seconds = max(5, min(3600, int(sys.argv[2]))) if len(sys.argv) > 2 else 300
+    except ValueError:
+        seconds = 300
+
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    parent = os.getppid()
+    workers, gpu_thread, gpu_err = [], None, []
+
+    if mode in ("gpu", "all"):
+        try:
+            cu, ctx, fn, out, name = gpu_init()
+        except (OSError, RuntimeError) as e:
+            emit(error=f"GPU-Last nicht möglich: {e}")
+            if mode == "gpu":
+                sys.exit(1)
+        else:
+            def run():
+                try:
+                    gpu_loop(cu, ctx, fn, out, stop)
+                except RuntimeError as e:
+                    gpu_err.append(str(e))
+                    stop.set()
+            gpu_thread = threading.Thread(target=run, daemon=True)
+            gpu_thread.start()
+            emit(started="gpu", device=name)
+
+    if mode in ("cpu", "all"):
+        ctx = mp.get_context("fork")
+        for _ in range(os.cpu_count() or 1):
+            p = ctx.Process(target=cpu_worker, daemon=True)
+            p.start()
+            workers.append(p)
+        emit(started="cpu", threads=len(workers))
+
+    end = time.monotonic() + seconds
+    while not stop.is_set() and time.monotonic() < end:
+        if os.getppid() != parent:  # App beendet -> mit beenden
+            break
+        stop.wait(1.0)
+    stop.set()
+    for p in workers:
+        p.terminate()
+    for p in workers:
+        p.join(2)
+    if gpu_thread:
+        gpu_thread.join(5)
+    if gpu_err:
+        emit(error=f"GPU-Last abgebrochen: {gpu_err[0]}")
+    emit(stopped=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -30,18 +30,32 @@ Getestet ausschließlich auf diesem Gerät und dieser Software:
 | Energieprofile | tuned-ppd 2.28.0 (mit thermald und nvidia-powerd) |
 
 Andere ROG/TUF-Modelle mit denselben Kernel-Schnittstellen (`asus_custom_fan_curve`,
-`asus-armoury`) könnten funktionieren. Das ist aber **nicht geprüft**. Rückmeldungen per Issue
-sind willkommen.
+`asus-armoury`) könnten funktionieren. Das ist aber **nicht geprüft**. Die App ist darauf
+vorbereitet: Sie erkennt Anzahl und Art der Lüfter, die Zahl der Kurvenpunkte, die verfügbaren
+Energieprofile und Leistungslimits zur Laufzeit und blendet aus, was ein Gerät nicht kann.
+Rückmeldungen per Issue sind willkommen, am besten mit dem **Gerätebericht** aus dem Menü.
 
 ## Funktionen
 
-- **Übersicht:** Live-Verlauf (5 Minuten) von CPU- und GPU-Temperatur und den drei Lüftern
-  (CPU, GPU, Mitte). Die GPU-Temperatur wird nur abgefragt, wenn die GPU ohnehin wach ist, damit
-  sie schlafen kann.
+- **Einrichtung beim ersten Start** (später über Menü → „Gerät einrichten …“):
+  - erkennt Lüfter, Kurvenpunkte, Profile und Limits und zeigt, ob das Gerät kompatibel ist
+  - prüft harmlos, ob die Firmware für Leistungslimits eine aktive Kurve verlangt
+  - liest die Werkskurven aller Energieprofile ein (schaltet dafür kurz durch die Profile)
+  - optional: misst die Höchstdrehzahl jedes Lüfters (je bis zu 25 s Vollgas, laut), prüft, ob
+    Vollgas wirkt, und erkennt Firmware-Eigenheiten wie falsche Drehzahlwerte
+  - erstellt einen **Gerätebericht** zum Kopieren in ein Issue (nur Hardware- und Treiberdaten)
+- **Übersicht:** Live-Verlauf (5 Minuten) von CPU- und GPU-Temperatur und allen Lüftern, Drehzahl
+  auch in % der gemessenen Höchstdrehzahl. Die GPU-Temperatur wird nur abgefragt, wenn die GPU
+  ohnehin wach ist, damit sie schlafen kann.
+- **Lasttest:** CPU, GPU oder beides voll auslasten, um Kurven und Limits zu prüfen. CPU-Last mit
+  einem Prozess pro Thread, GPU-Last mit einem kleinen CUDA-Rechenkern direkt über den
+  NVIDIA-Treiber (`libcuda`, keine Zusatzpakete). Stoppt automatisch nach 1–30 Minuten und beim
+  Schließen der App. Braucht keine Administratorrechte.
 - **Energieprofil:** Leise / Ausgewogen / Leistung. Synchron mit dem GNOME-Energiemodus und Fn+F5,
   läuft über den PowerProfiles-D-Bus.
 - **Vollgas:** pro Lüfter, bis zum Abschalten oder Neustart.
-- **Lüfterkurven:** grafischer Editor mit 8 Punkten pro Lüfter und Profil. Die Werkskurve wird zum
+- **Lüfterkurven:** grafischer Editor pro Lüfter und Profil (Punktzahl wie von der Firmware
+  vorgegeben, auf dem Testgerät 8). Die Werkskurve wird zum
   Vergleich gestrichelt angezeigt, dazu die aktuelle Temperatur. Vorlagen: Leise, Ausgewogen,
   Kühl, Werkskurve.
 - **Leistungslimits pro Profil:** CPU PL1/PL2, NVIDIA Dynamic Boost, NVIDIA-Temperaturziel.
@@ -58,17 +72,33 @@ sind willkommen.
 | Helfer | `/usr/libexec/rog-fan-control/rog-fan-helper` | schreibt geprüfte Werte, gestartet via pkexec/polkit |
 | Dienst | `rog-fan-control.service` | setzt Kurven und Limits bei Boot, Profilwechsel und nach Firmware-Reset |
 | Konfiguration | `/etc/rog-fan-control/config.json` | eigene Kurven und Limits pro Profil |
-| Werkskurven | `/var/lib/rog-fan-control/factory.json` | vom Dienst beim Profilwechsel eingelesen |
+| Werkskurven | `/var/lib/rog-fan-control/factory.json` | bei der Einrichtung und bei Profilwechseln eingelesen |
+| Geräteprofil | `/var/lib/rog-fan-control/device.json` | Ergebnis der Einrichtung (Höchstdrehzahlen, Eigenheiten) |
+| Lasttest | `/usr/libexec/rog-fan-control/rog-fan-load` | läuft als Benutzer, ohne Sonderrechte |
 
-Die Polkit-Aktion `org.local.rogfancontrol.helper` verlangt ein Admin-Passwort und merkt es sich
-einige Minuten lang (`auth_admin_keep`).
+## Warum fragt die App nach dem Passwort?
+
+Lüfterkurven, Vollgas und Leistungslimits werden über Kernel-Schnittstellen der ASUS-Firmware
+gesetzt (`/sys/class/hwmon/…`, `/sys/class/firmware-attributes/asus-armoury/…`). Diese darf aus
+Sicherheitsgründen nur root ändern – sonst könnte jedes Programm die Kühlung abschalten.
+
+- Die **Oberfläche läuft ohne Sonderrechte**. Anzeige, Verlauf, Lasttest und Profilwechsel
+  brauchen kein Passwort.
+- Nur beim **Ändern** (Anwenden, Vollgas, Einrichtung, Dienst aktivieren) startet sie über polkit
+  den Helfer `rog-fan-helper`. Er kennt nur wenige feste Befehle, nimmt ausschließlich geprüfte
+  Werte an und führt keine beliebigen Befehle aus.
+- Die Polkit-Aktion `org.local.rogfancontrol.helper` verlangt ein Administrator-Passwort und
+  merkt es sich einige Minuten lang (`auth_admin_keep`).
+- Der Hintergrunddienst läuft als root, damit er Kurven nach Profilwechseln und Neustarts ohne
+  Rückfrage neu setzen kann.
 
 ## Voraussetzungen
 
 - Kernel mit `asus-wmi` (hwmon `asus` und `asus_custom_fan_curve`) und `asus-armoury`
   (`/sys/class/firmware-attributes/asus-armoury`)
 - Python 3, PyGObject, GTK 4, libadwaita ≥ 1.7, polkit, systemd
-- für die GPU-Temperatur: `nvidia-smi`; für Dynamic Boost: `nvidia-powerd`
+- für die GPU-Temperatur: `nvidia-smi`; für Dynamic Boost: `nvidia-powerd`; für den GPU-Lasttest:
+  NVIDIA-GPU mit proprietärem Treiber (`libcuda`)
 - **nicht gleichzeitig mit asusctl/asusd verwenden**, sonst überschreiben sich beide gegenseitig
 
 ## Installieren
@@ -115,6 +145,10 @@ anderen Modellen kann es anders sein.
   sank die Leistung von 112 W (PL1 139 W) auf 45 W (PL1 35 / PL2 45 W).
 - Die Leistungslimits bleiben über Profilwechsel hinweg stehen. Der Dienst setzt deshalb bei
   jedem Wechsel die Limits des neuen Profils.
+- Die Werkskurven unterscheiden sich je Profil. Im Profil „Leise“ enthält die Firmware-Tabelle
+  doppelte Temperaturpunkte (z. B. `63/2 63/2 … 75/38 75/38`). Das ist so hinterlegt und kein
+  Lesefehler.
+- Höchstdrehzahl (gemessen bei der Einrichtung): CPU 5300, GPU 6100, Mitte 4500 U/min.
 
 ## Lizenz
 

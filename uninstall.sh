@@ -24,6 +24,11 @@ rm -f /usr/local/bin/rog-fan-control /etc/systemd/system/rog-fan-control.service
       /usr/share/polkit-1/actions/org.local.rogfancontrol.policy \
       /usr/local/share/applications/org.local.RogFanControl.desktop \
       /usr/local/share/icons/hicolor/scalable/apps/org.local.RogFanControl.svg
+# Icon-Cache entfernen, wenn außer ihm nichts mehr im Ordner liegt
+I=/usr/local/share/icons/hicolor
+if [ -d "$I" ] && [ -z "$(find "$I" -type f ! -name icon-theme.cache)" ]; then
+    rm -f "$I/icon-theme.cache"
+fi
 [ "${1:-}" = "--purge" ] && rm -rf /etc/rog-fan-control /var/lib/rog-fan-control
 systemctl daemon-reload
 echo "Entfernt. Lüfter und Leistungslimits stehen wieder auf Werkseinstellung."
