@@ -11,7 +11,8 @@ gemeinsam benutzt. Auf dem G614JI mit Kernel 7.3 gemessenes Verhalten:
 * asus-armoury lehnt PL1/PL2-Änderungen ohne aktive eigene Kurve mit EBUSY ab;
   apply_limits() aktiviert dafür kurz die Werkskurve (_ppt_unlock).
 * asus/pwmN_enable: 0 = Vollgas, 2 = Automatik. Bei GPU/Mitte liest der Wert
-  immer 0, der Zustand wird daher in STATE_PATH mitgeführt.
+  immer 0, der Zustand wird daher in STATE_PATH mitgeführt. Im Vollgas-Modus
+  meldet der mittlere Lüfter die Drehzahl mit gesetztem Bit 15 (_clean_rpm).
 """
 
 import contextlib
@@ -103,6 +104,20 @@ def pwm_to_pct(pwm):
 # Lesen
 # --------------------------------------------------------------------------- #
 
+MAX_PLAUSIBLE_RPM = 15000
+
+
+def _clean_rpm(rpm):
+    """Im Vollgas-Modus setzt die Firmware (mittlerer Lüfter, G614JI) Bit 15 im
+    Rohwert (Einheit 100 U/min): 3281200 = (0x8000 + 44) * 100 = 4400 U/min."""
+    if rpm is None:
+        return None
+    raw = rpm // 100
+    if raw & 0x8000:
+        rpm = (raw & 0x7FFF) * 100
+    return rpm if 0 <= rpm <= MAX_PLAUSIBLE_RPM else None
+
+
 def read_fans():
     d = find_hwmon("asus")
     out = []
@@ -111,7 +126,7 @@ def read_fans():
         out.append({
             "fan": fan,
             "label": _read(f"{d}/fan{i}_label", fan) if d else fan,
-            "rpm": _read_int(f"{d}/fan{i}_input") if d else None,
+            "rpm": _clean_rpm(_read_int(f"{d}/fan{i}_input")) if d else None,
         })
     return out
 

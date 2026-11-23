@@ -107,6 +107,8 @@ anderen Modellen kann es anders sein.
 - Ein Profilwechsel schaltet eigene Kurven ab. Der Dienst setzt sie innerhalb von etwa 2 s neu.
 - `asus/pwmN_enable`: `0` = Vollgas, `2` = Automatik. GPU- und Mittellüfter lesen immer `0`,
   deshalb wird der Zustand in `/run/rog-fan-control/state.json` mitgeführt.
+- Im Vollgas-Modus meldet der mittlere Lüfter die Drehzahl mit gesetztem Bit 15
+  (z. B. `3281200` statt `4400`). Die App rechnet das heraus.
 - `asus-armoury` lehnt PL1/PL2-Änderungen mit `EBUSY` ab („PPT change requires an active fan
   curve“), solange keine eigene Kurve aktiv ist. Die App aktiviert dafür kurz die Werkskurve des
   Profils und schaltet sie danach wieder ab. Das Limit bleibt erhalten und wirkt: Unter Volllast

@@ -145,10 +145,12 @@ class LiveGraph(Gtk.DrawingArea):
         pw = width - left - right
         self._panel(cr, left, top, pw, ph, fg,
                     [("cpu_temp", 0), ("gpu_temp", 1)], 20, 100, "°C", 20)
-        rpms = [s[i] for _, *s in self.history for i in (2, 3, 4) if s[i]]
-        vmax = max(6000, math.ceil(max(rpms, default=0) / 1000) * 1000)
+        rpms = [s[i] for _, *s in self.history for i in (2, 3, 4)
+                if s[i] and s[i] <= hw.MAX_PLAUSIBLE_RPM]
+        vmax = max(6000, math.ceil(max(rpms, default=0) / 2000) * 2000)
+        step = max(2000, math.ceil(vmax / 4 / 1000) * 1000)  # höchstens ~5 Gitterlinien
         self._panel(cr, left, top + ph + gap, pw, ph, fg,
-                    [("cpu", 2), ("gpu", 3), ("mid", 4)], 0, vmax, "RPM", 2000 if vmax <= 8000 else 4000)
+                    [("cpu", 2), ("gpu", 3), ("mid", 4)], 0, vmax, "RPM", step)
         y = height - 6
         draw_text(self, cr, left, y, "−5 min", fg, 0.5)
         draw_text(self, cr, left + pw, y, "jetzt", fg, 0.5, "right")

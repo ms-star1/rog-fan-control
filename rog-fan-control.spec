@@ -1,5 +1,5 @@
 Name:           rog-fan-control
-Version:        0.1.2
+Version:        0.1.3
 Release:        1%{?dist}
 Summary:        Fan curves, fan modes, power profiles and power limits for ASUS ROG laptops
 License:        MIT
@@ -69,6 +69,10 @@ make check LIBEXECDIR=%{_libexecdir}/%{name}
 %dir %{_sysconfdir}/%{name}
 
 %changelog
+* Mon Nov 23 2026 ms-star1 <294934886+ms-star1@users.noreply.github.com> - 0.1.3-1
+- Drehzahl des mittleren Lüfters im Vollgas-Modus korrekt (Statusbit 0x8000)
+- Verlaufsdiagramm robust gegen unplausible Drehzahlen
+
 * Mon Nov 23 2026 ms-star1 <294934886+ms-star1@users.noreply.github.com> - 0.1.2-1
 - MIT-Lizenz, Projekt-URL, ausführliche README mit Testgerät
 
