@@ -13,7 +13,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Adw, Gio, GLib, Gtk, PangoCairo  # noqa: E402
+from gi.repository import Adw, Gio, GLib, GObject, Gtk, PangoCairo  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rogfan_hw as hw  # noqa: E402
@@ -133,87 +133,97 @@ def draw_text(widget, cr, x, y, text, rgb, alpha=1.0, align="left"):
 # Live-Diagramm
 # --------------------------------------------------------------------------- #
 
-class LiveGraph(Gtk.DrawingArea):
-    """Drei übereinanderliegende Verläufe: Temperaturen, Leistung, Drehzahlen.
+class Chart(Gtk.Box):
+    """Karte mit Titel, Legende (mit aktuellen Werten) und Verlaufsdiagramm.
 
-    history: deque von (zeit, cpu_temp, gpu_temp, {lüfter: rpm}, {cpu/gpu/sys: watt})"""
+    series: Liste von (schlüssel, name, farbe); get(eintrag) -> {schlüssel: wert}
+    scale(werte) -> (min, max, schritt); fmt(wert) -> Text für die Legende"""
 
-    def __init__(self, history):
-        super().__init__()
-        self.history = history
-        self.rpm_hint = 0  # gemessene Höchstdrehzahl (Einrichtung)
-        self.set_content_height(390)
-        self.set_hexpand(True)
-        self.set_draw_func(self._draw)
+    def __init__(self, history, title, unit, series, get, scale, fmt, axis_fmt=None):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4, css_classes=["card"])
+        self.history, self.unit, self.series = history, unit, series
+        self.get, self.scale, self.fmt = get, scale, fmt
+        self.axis_fmt = axis_fmt or (lambda v: f"{v:g}")
+        head = Gtk.Label(label=title, xalign=0, css_classes=["heading"])
+        self.legend = Gtk.Label(xalign=0, use_markup=True, wrap=True, css_classes=["caption"])
+        for w in (head, self.legend):
+            w.set_margin_start(12)
+            w.set_margin_end(12)
+        head.set_margin_top(10)
+        self.area = Gtk.DrawingArea(content_height=170, hexpand=True, vexpand=True)
+        self.area.set_draw_func(self._draw)
+        self.area.set_margin_end(10)
+        self.area.set_margin_bottom(6)
+        self.append(head)
+        self.append(self.legend)
+        self.append(self.area)
 
-    def _grid(self, cr, x0, y0, w, h, fg, vmin, vmax, step, unit):
+    def update(self):
+        last = self.get(self.history[-1]) if self.history else {}
+        parts = []
+        for key, name, rgb in self.series:
+            v = last.get(key)
+            parts.append(f"<span foreground='{hexcol(rgb)}'>●</span> {GLib.markup_escape_text(name)} "
+                         f"<b>{GLib.markup_escape_text(self.fmt(v) if v is not None else '–')}</b>")
+        self.legend.set_markup("   ".join(parts))
+        self.area.queue_draw()
+
+    def _draw(self, area, cr, width, height):
+        fg = fg_color(area)
+        left, top, bottom = 40, 8, 18
+        w, h = width - left, height - top - bottom
+        values = [v for e in self.history for v in self.get(e).values() if v is not None]
+        vmin, vmax, step = self.scale(values)
         cr.set_line_width(1)
         v = vmin
         while v <= vmax + 1e-6:
-            y = y0 + h - (v - vmin) / (vmax - vmin) * h
+            y = top + h - (v - vmin) / (vmax - vmin) * h
             cr.set_source_rgba(*fg, 0.10)
-            cr.move_to(x0, y)
-            cr.line_to(x0 + w, y)
+            cr.move_to(left, y)
+            cr.line_to(left + w, y)
             cr.stroke()
-            label = f"{v / 1000:g}k" if unit == "RPM" and v else f"{v:g}"
-            draw_text(self, cr, x0 - 6, y, label, fg, 0.6, "right")
+            draw_text(area, cr, left - 6, y, self.axis_fmt(v), fg, 0.6, "right")
             v += step
-        draw_text(self, cr, x0, y0 - 14, unit, fg, 0.6)
-
-    def _line(self, cr, x0, y0, w, h, vmin, vmax, pts, rgb):
-        if len(pts) < 2:
-            return
         now = time.monotonic()
-        cr.set_source_rgb(*rgb)
-        cr.set_line_width(2)
-        first = True
-        for t, val in pts:
-            x = x0 + w - (now - t) / HISTORY_SECONDS * w
-            if x < x0:
-                continue
-            y = y0 + h - (min(max(val, vmin), vmax) - vmin) / (vmax - vmin) * h
-            if first:
-                cr.move_to(x, y)
-                first = False
-            else:
-                cr.line_to(x, y)
-        cr.stroke()
+        for key, _name, rgb in self.series:
+            pts = [(e["t"], self.get(e).get(key)) for e in self.history]
+            cr.set_source_rgb(*rgb)
+            cr.set_line_width(2)
+            pen = False
+            for t, val in pts:
+                x = left + w - (now - t) / HISTORY_SECONDS * w
+                if val is None or x < left:
+                    pen = False
+                    continue
+                y = top + h - (min(max(val, vmin), vmax) - vmin) / (vmax - vmin) * h
+                (cr.line_to if pen else cr.move_to)(x, y)
+                pen = True
+            cr.stroke()
+        draw_text(area, cr, left, height - 7, "−5 min", fg, 0.5)
+        draw_text(area, cr, left + w, height - 7, f"jetzt · {self.unit}", fg, 0.5, "right")
 
-    def _draw(self, _area, cr, width, height):
-        fg = fg_color(self)
-        left, right, top, gap, bottom = 44, 8, 22, 40, 18
-        ph = (height - top - 2 * gap - bottom) / 3
-        pw = width - left - right
 
-        self._grid(cr, left, top, pw, ph, fg, 20, 100, 20, "°C")
-        for idx, key in ((1, "cpu_temp"), (2, "gpu_temp")):
-            pts = [(e[0], e[idx]) for e in self.history if e[idx] is not None]
-            self._line(cr, left, top, pw, ph, 20, 100, pts, COL[key])
+def nice_scale(values, minimum, steps=(1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 2000, 5000)):
+    """0 bis aufgerundetes Maximum mit höchstens 4 Abschnitten."""
+    vmax = max([minimum] + values)
+    step = next((s for s in steps if vmax / s <= 4), steps[-1])
+    return 0, math.ceil(vmax / step) * step, step
 
-        yw = top + ph + gap
-        watts = [w for e in self.history for w in e[4].values() if w is not None]
-        wmax = max(50, max(watts, default=0))
-        wstep = next(s for s in (10, 25, 50, 100, 200) if wmax / s <= 4)
-        wmax = math.ceil(wmax / wstep) * wstep
-        self._grid(cr, left, yw, pw, ph, fg, 0, wmax, wstep, "W")
-        for key in ("cpu", "gpu", "sys"):
-            pts = [(e[0], e[4].get(key)) for e in self.history if e[4].get(key) is not None]
-            self._line(cr, left, yw, pw, ph, 0, wmax, pts, COL[f"{key}_w"])
 
-        y0 = yw + ph + gap
-        rpms = [r for e in self.history for r in e[3].values()
-                if r is not None and r <= hw.MAX_PLAUSIBLE_RPM]
-        vmax = max(6000, self.rpm_hint, max(rpms, default=0))
-        vmax = math.ceil(vmax / 2000) * 2000
-        step = max(2000, math.ceil(vmax / 4 / 1000) * 1000)  # höchstens ~5 Gitterlinien
-        self._grid(cr, left, y0, pw, ph, fg, 0, vmax, step, "RPM")
-        for key in hw.fan_keys():
-            pts = [(e[0], e[3].get(key)) for e in self.history if e[3].get(key) is not None]
-            self._line(cr, left, y0, pw, ph, 0, vmax, pts, fan_color(key))
+class OverviewPage(Gtk.ScrolledWindow):
+    """Seite mit breitem Diagrammbereich oben und schmaler Einstellungsspalte."""
 
-        y = height - 6
-        draw_text(self, cr, left, y, "−5 min", fg, 0.5)
-        draw_text(self, cr, left + pw, y, "jetzt", fg, 0.5, "right")
+    def __init__(self, top):
+        super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
+        padded(outer, 24, 12)
+        outer.append(Adw.Clamp(maximum_size=1800, tightening_threshold=1800, child=top))
+        self.col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
+        outer.append(Adw.Clamp(maximum_size=600, tightening_threshold=400, child=self.col))
+        self.set_child(outer)
+
+    def add(self, widget):
+        self.col.append(widget)
 
 
 # --------------------------------------------------------------------------- #
@@ -689,12 +699,15 @@ class ReportDialog(Adw.Dialog):
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="ROG Fan Control")
-        self.set_default_size(780, 860)
+        self.set_default_size(820, 900)
+        self.set_size_request(380, 400)  # nötig für Adw.Breakpoint
+        self.rpm_hint = 0
         self._updating = False
         self.history = deque(maxlen=HISTORY_SECONDS)
         self.gpu_dev = hw.find_nvidia_gpu()
         self.gpu_temp = None
         self.gpu_power = None
+        self.gpu_clock = None
         self.gpu_temp_time = 0
         self._gpu_busy = False
         self._ppd = None
@@ -719,8 +732,12 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_content(self.toasts)
 
         header = Adw.HeaderBar()
+        self.header = header
         self.stack = Adw.ViewStack()
         header.set_title_widget(Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE))
+        # schmales Fenster: Seitenumschaltung als Leiste unten (über Breakpoint)
+        self.switcher_bar = Adw.ViewSwitcherBar(stack=self.stack)
+        view.add_bottom_bar(self.switcher_bar)
         menu = Gio.Menu()
         menu.append("Gerät einrichten …", "win.setup")
         menu.append("Gerätebericht", "win.report")
@@ -794,7 +811,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _apply_device(self):
         hints = [hw.max_rpm(k, self.device) or 0 for k in hw.fan_keys()]
-        self.graph.rpm_hint = max(hints, default=0)
+        self.rpm_hint = max(hints, default=0)
 
     def _password_info(self):
         d = Adw.AlertDialog(heading=PASSWORD_TITLE, body=PASSWORD_TEXT)
@@ -828,33 +845,67 @@ class MainWindow(Adw.ApplicationWindow):
         row.set_child(padded(widget))
         return row
 
+    # ------------------------------------------------------------------ Diagramme
+
+    def _charts_section(self):
+        cpu, gpu, sys_ = COL["cpu_temp"], COL["gpu_temp"], COL["sys_w"]
+        has_gpu = bool(self.gpu_dev)
+        temp_s = [("cpu", "CPU", cpu)] + ([("gpu", "GPU", gpu)] if has_gpu else [])
+        watt_s = temp_s + ([("sys", "System (Akku)", sys_)] if hw.has_battery() else [])
+        fan_s = [(f["key"], hw.fan_name(f["key"]).replace("-Lüfter", "").replace(" Lüfter", ""),
+                  fan_color(f["key"])) for f in self.fans if f["has_rpm"]]
+        clk_s = [("cpu", "CPU Ø", cpu), ("cpu_max", "CPU max", (0.55, 0.75, 0.97))]
+        if has_gpu:
+            clk_s.append(("gpu", "GPU", gpu))
+        self.charts = [
+            Chart(self.history, "Temperatur", "°C", temp_s, lambda e: e["temp"],
+                  lambda v: (20, 100, 20), lambda v: f"{v:.0f} °C"),
+            Chart(self.history, "Lüfterdrehzahl", "U/min", fan_s, lambda e: e["rpm"],
+                  lambda v: self._rpm_scale(v), lambda v: f"{v:.0f}",
+                  axis_fmt=lambda v: f"{v / 1000:g}k" if v else "0"),
+            Chart(self.history, "Leistungsaufnahme", "W", watt_s, lambda e: e["w"],
+                  lambda v: nice_scale(v, 50), lambda v: f"{v:.0f} W"),
+            Chart(self.history, "Taktfrequenz", "GHz", clk_s, lambda e: e["ghz"],
+                  lambda v: nice_scale(v, 3, steps=(1, 2, 5)),
+                  lambda v: f"{v:.1f} GHz"),
+        ]
+        self.chart_grid = Gtk.Grid(column_spacing=12, row_spacing=12, column_homogeneous=True)
+        self._layout_charts(2)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.append(Gtk.Label(label="Verlauf", xalign=0, css_classes=["heading"]))
+        box.append(Gtk.Label(label="Die letzten 5 Minuten", xalign=0, css_classes=["dim-label"]))
+        box.append(self.chart_grid)
+
+        # Breit: 4 nebeneinander · normal: 2×2 · sehr schmal: untereinander
+        for cond, cols in (("min-width: 1100sp", 4), ("max-width: 560sp", 1)):
+            bp = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(cond))
+            bp.connect("apply", lambda _b, c=cols: self._layout_charts(c))
+            bp.connect("unapply", lambda _b: self._layout_charts(2))
+            if cols == 1:
+                no_title = GObject.Value(Gtk.Widget)
+                no_title.set_object(None)
+                bp.add_setter(self.header, "title-widget", no_title)
+                bp.add_setter(self.switcher_bar, "reveal", True)
+            self.add_breakpoint(bp)
+        return box
+
+    def _layout_charts(self, cols):
+        if getattr(self, "_chart_cols", None) == cols:
+            return
+        self._chart_cols = cols
+        for c in self.charts:
+            if c.get_parent() is not None:
+                self.chart_grid.remove(c)
+        for i, c in enumerate(self.charts):
+            self.chart_grid.attach(c, i % cols, i // cols, 1, 1)
+
+    def _rpm_scale(self, values):
+        vmax = max([6000, self.rpm_hint] + [v for v in values if v <= hw.MAX_PLAUSIBLE_RPM])
+        vmax = math.ceil(vmax / 2000) * 2000
+        return 0, vmax, max(2000, math.ceil(vmax / 4 / 1000) * 1000)
+
     def _page_overview(self):
-        page = Adw.PreferencesPage()
-
-        g = Adw.PreferencesGroup(title="Verlauf", description="Die letzten 5 Minuten")
-        legend = Gtk.Label(xalign=0, use_markup=True, wrap=True, css_classes=["caption"])
-
-        def dots(items):
-            return "   ".join(f"<span foreground='{hexcol(c)}'>●</span> {GLib.markup_escape_text(t)}"
-                               for c, t in items)
-        comp = [(COL["cpu_temp"], "CPU")]
-        if self.gpu_dev:
-            comp.append((COL["gpu_temp"], "GPU"))
-        if hw.has_battery():
-            comp.append((COL["sys_w"], "System (nur im Akkubetrieb)"))
-        fans = [(fan_color(f["key"]), hw.fan_name(f["key"])) for f in self.fans if f["has_rpm"]]
-        legend.set_markup(f"<b>°C / W:</b>  {dots(comp)}\n<b>RPM:</b>  {dots(fans)}")
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, css_classes=["card"])
-        self.graph = LiveGraph(self.history)
-        self.graph.set_margin_top(12)
-        self.graph.set_margin_start(8)
-        self.graph.set_margin_end(12)
-        legend.set_margin_start(12)
-        legend.set_margin_bottom(10)
-        box.append(self.graph)
-        box.append(legend)
-        g.add(box)
-        page.add(g)
+        page = OverviewPage(self._charts_section())
 
         g = Adw.PreferencesGroup(title="Energieprofil",
                                  description="Entspricht Fn+F5 und dem GNOME-Energiemodus. "
@@ -1043,13 +1094,20 @@ class MainWindow(Adw.ApplicationWindow):
             if time.monotonic() - self.gpu_temp_time > 3:
                 self._poll_gpu()
         else:
-            self.gpu_temp = self.gpu_power = None
+            self.gpu_temp = self.gpu_power = self.gpu_clock = None
         cpu_w = hw.read_power()
         bat_w = hw.read_battery_power()
         gpu_w = self.gpu_power if gpu_state == "active" else (0.0 if self.gpu_dev else None)
-        self.history.append((time.monotonic(), cpu, self.gpu_temp, rpms,
-                             {"cpu": cpu_w, "gpu": gpu_w, "sys": bat_w}))
-        self.graph.queue_draw()
+        f_avg, f_max = hw.read_cpu_freq()
+        self.history.append({
+            "t": time.monotonic(),
+            "temp": {"cpu": cpu, "gpu": self.gpu_temp},
+            "rpm": rpms,
+            "w": {"cpu": cpu_w, "gpu": gpu_w, "sys": bat_w},
+            "ghz": {"cpu": f_avg, "cpu_max": f_max, "gpu": self.gpu_clock},
+        })
+        for c in self.charts:
+            c.update()
 
         self.cpu_temp_lbl.set_label(f"{cpu:.0f} °C" if cpu is not None else "–")
         self.cpu_temp_row.set_subtitle(f"{cpu_w:.1f} W" if cpu_w is not None else
@@ -1105,7 +1163,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._gpu_busy = True
         try:
             proc = Gio.Subprocess.new(
-                ["nvidia-smi", "--query-gpu=temperature.gpu,power.draw", "--format=csv,noheader,nounits"],
+                ["nvidia-smi", "--query-gpu=temperature.gpu,power.draw,clocks.sm",
+                 "--format=csv,noheader,nounits"],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
         except GLib.Error:
             self._gpu_busy = False
@@ -1122,8 +1181,12 @@ class MainWindow(Adw.ApplicationWindow):
                     self.gpu_power = float(parts[1])
                 except (IndexError, ValueError):
                     self.gpu_power = None
+                try:
+                    self.gpu_clock = float(parts[2]) / 1000
+                except (IndexError, ValueError):
+                    self.gpu_clock = None
             except (GLib.Error, ValueError, IndexError):
-                self.gpu_temp = self.gpu_power = None
+                self.gpu_temp = self.gpu_power = self.gpu_clock = None
         proc.communicate_utf8_async(None, None, done)
 
     # ------------------------------------------------------------------ Hinweise
@@ -1180,6 +1243,11 @@ class MainWindow(Adw.ApplicationWindow):
                for p in self.saved["profiles"]) and st["nvidia-powerd.service"] != "active":
             hints.append(("dialog-warning-symbolic", "nvidia-powerd läuft nicht",
                           "Ohne nvidia-powerd hat das Dynamic-Boost-Limit keine Wirkung."))
+        if hw.turbo_disabled():
+            hints.append(("dialog-information-symbolic", "Turbo-Boost der CPU ist aus",
+                          "Die CPU taktet höchstens mit Basistakt. Das setzt meist das tuned-Profil "
+                          "„powersave“, das im Energieprofil „Leise“ aktiv ist. Spart Strom und "
+                          "Lärm; im Profil „Leistung“ ist der Turbo wieder an."))
         fs = [hw.fan_name(k) for k, on in hw.read_state()["fullspeed"].items() if on]
         if fs:
             hints.append(("dialog-information-symbolic", "Vollgas aktiv",

@@ -44,8 +44,11 @@ Rückmeldungen per Issue sind willkommen, am besten mit dem **Gerätebericht** a
   - optional: misst die Höchstdrehzahl jedes Lüfters (je bis zu 25 s Vollgas, laut), prüft, ob
     Vollgas wirkt, und erkennt Firmware-Eigenheiten wie falsche Drehzahlwerte
   - erstellt einen **Gerätebericht** zum Kopieren in ein Issue (nur Hardware- und Treiberdaten)
-- **Übersicht:** Live-Verlauf (5 Minuten) von Temperatur, Leistungsaufnahme und Lüfterdrehzahl,
-  Drehzahl auch in % der gemessenen Höchstdrehzahl. Die GPU wird nur abgefragt, wenn sie ohnehin
+- **Übersicht:** Live-Verlauf (5 Minuten) in vier Karten – Temperatur, Lüfterdrehzahl,
+  Leistungsaufnahme und Taktfrequenz (CPU Ø und max, GPU) – mit aktuellen Werten in der Legende.
+  Die Karten stehen je nach Fensterbreite nebeneinander (ab ca. 1100 px), im 2×2-Raster oder
+  untereinander; im schmalen Fenster wandert die Seitenumschaltung nach unten. Drehzahl auch in %
+  der gemessenen Höchstdrehzahl. Die GPU wird nur abgefragt, wenn sie ohnehin
   wach ist, damit sie schlafen kann.
 - **Leistungsaufnahme in Watt:**
   - CPU-Paket aus den RAPL-Energiezählern. Diese darf nur root lesen (Schutz vor dem
@@ -156,6 +159,9 @@ anderen Modellen kann es anders sein.
   doppelte Temperaturpunkte (z. B. `63/2 63/2 … 75/38 75/38`). Das ist so hinterlegt und kein
   Lesefehler.
 - Höchstdrehzahl (gemessen bei der Einrichtung): CPU 5300, GPU 6100, Mitte 4500 U/min.
+- Im Energieprofil „Leise“ schaltet das tuned-Profil `powersave` den Turbo-Boost ab
+  (`intel_pstate/no_turbo=1`); die CPU taktet dann höchstens mit Basistakt (2,6 GHz P-Kerne,
+  1,9 GHz E-Kerne). Die App weist darauf hin.
 
 ## Lizenz
 

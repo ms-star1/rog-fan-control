@@ -29,7 +29,7 @@ import platform
 import subprocess
 import time
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.0"
 REPO_URL = "https://github.com/ms-star1/rog-fan-control"
 TESTED_DEVICE = "ASUS ROG Strix G16 G614JI (BIOS G614JI.333), Fedora 45, Kernel 7.3.4"
 
@@ -383,6 +383,22 @@ def read_battery_power():
         if p:
             return abs(p) / 1e6
     return None
+
+
+def read_cpu_freq():
+    """Aktueller Takt aller Kerne: (Durchschnitt, Maximum) in GHz."""
+    vals = [_read_int(p) for p in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq")]
+    vals = [v for v in vals if v]
+    if not vals:
+        return None, None
+    return sum(vals) / len(vals) / 1e6, max(vals) / 1e6
+
+
+def turbo_disabled():
+    """True, wenn der Turbo-Boost abgeschaltet ist (intel_pstate oder cpufreq/boost)."""
+    if _read("/sys/devices/system/cpu/intel_pstate/no_turbo") == "1":
+        return True
+    return _read("/sys/devices/system/cpu/cpufreq/boost") == "0"
 
 
 def has_battery():

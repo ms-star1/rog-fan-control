@@ -1,7 +1,7 @@
 """Startet die GUI aus dem Projektordner und rendert einige Ansichten als PNG.
 
 Aufruf: XDG_CONFIG_HOME=test/cfg python3 test/shot.py [ansicht ...]
-Ansichten: overview, overview_tall, curves, limits, setup, password
+Ansichten: overview, overview_tall, wide, narrow, curves, limits, setup, password
 """
 import os
 import runpy
@@ -31,7 +31,10 @@ def prepare(win, view):
     if state["dialog"]:
         state["dialog"].force_close()
         state["dialog"] = None
-    win.set_default_size(780, 1500 if view == "overview_tall" else 860)
+    sizes = {"overview_tall": (780, 1500), "wide": (1440, 760), "narrow": (440, 1300)}
+    win.set_default_size(*sizes.get(view, (820, 900)))
+    if view in ("wide", "narrow"):
+        win.stack.set_visible_child_name("overview")
     if view in ("overview", "overview_tall", "curves", "limits"):
         win.stack.set_visible_child_name(view.replace("_tall", ""))
     elif view == "setup":
